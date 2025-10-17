@@ -36,6 +36,10 @@ async function bootstrap(): Promise<void> {
   SwaggerModule.setup('docs', app, doc);
 
   const port = Number(process.env.PORT) || 3000;
+  const http = app.getHttpAdapter(); // <= NO usa Nest guards
+  http.get('/healthz', (_req, res) => {
+    res.status(200).send('ok');
+  });
   await app.listen(port, '0.0.0.0');
   const logger = new Logger('Bootstrap');
   logger.log(`Server http://localhost:${port}/v1`);
