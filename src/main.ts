@@ -40,10 +40,12 @@ async function bootstrap(): Promise<void> {
   http.get('/healthz', (_req, res) => {
     res.status(200).send('ok');
   });
-  await app.listen(port, '0.0.0.0');
-  const logger = new Logger('Bootstrap');
-  logger.log(`Server http://localhost:${port}/v1`);
-  logger.log(`Swagger http://localhost:${port}/docs`);
+const logger = new Logger('Bootstrap');
+logger.log(`NODE_ENV=${process.env.NODE_ENV ?? 'undefined'}`);
+logger.log(`Binding 0.0.0.0:${port}`);
+await app.listen(port, '0.0.0.0');
+logger.log(`HTTP ready (prefix /v1), swagger /docs`);
+
 }
 
 bootstrap().catch((err) => {
