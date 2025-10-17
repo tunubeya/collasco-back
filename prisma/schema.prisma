@@ -1,0 +1,277 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  DEVELOPER
+  TESTER
+}
+
+enum ProjectMemberRole {
+  OWNER
+  MAINTAINER
+  DEVELOPER
+  VIEWER
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ON_HOLD
+  FINISHED
+}
+
+enum Visibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum FeaturePriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum FeatureStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+model User {
+  id               String             @id @default(uuid())
+  email            String             @unique
+  passwordHash     String
+  name             String?
+  role             UserRole
+  isActive         Boolean            @default(true)
+  lastLoginAt      DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  // Identidad GitHub (token por usuario; acciones en nombre del user)
+  githubIdentity   GithubIdentity?
+  // Trazabilidad
+  modifiedModules  Module[]           @relation("ModuleLastModifiedBy")
+  modifiedFeatures Feature[]          @relation("FeatureLastModifiedBy")
+  createdModuleVs  ModuleVersion[]    @relation("ModuleVersionCreatedBy")
+  createdFeatureVs FeatureVersion[]   @relation("FeatureVersionCreatedBy")
+  // Tokens de sesión
+  UserRefreshToken UserRefreshToken[]
+  // 🔥 Proyectos que posee
+  ownedProjects    Project[]          @relation("ProjectOwner")
+  // 🔥 Membresías N:M por proyecto (permisos por proyecto)
+  memberships      ProjectMember[]
+}
+
+model UserRefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model GithubIdentity {
+  id           String    @id @default(uuid())
+  userId       String    @unique
+  //refreshToken String?
+  //tokenType    String? // "Bearer"
+  //scopes       String? // "repo,workflow"
+  expiresAt    DateTime?
+  accessToken  String // ⚠️ ideal: cifrado en reposo
+  username     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Project {
+  id               String                   @id @default(uuid())
+  name             String
+  slug             String?
+  description      String?
+  status           ProjectStatus            @default(ACTIVE)
+  repositoryUrl    String?
+  visibility       Visibility               @default(PRIVATE)
+  deadline         DateTime?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  // 🔥 Dueño real del proyecto (User)
+  ownerId          String
+  owner            User                     @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  // 🔥 Miembros N:M con rol
+  members          ProjectMember[]
+  // 🔥 Credencial GitHub 1:1 (token del repo/proyecto)
+  githubCredential ProjectGithubCredential?
+  // Estructura funcional
+  modules          Module[]
+
+  @@unique([ownerId, slug])
+  @@index([ownerId])
+}
+
+model ProjectMember {
+  projectId String
+  userId    String
+  role      ProjectMemberRole @default(DEVELOPER)
+  joinedAt  DateTime          @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, userId])
+  @@index([userId])
+}
+
+model ProjectGithubCredential {
+  id           String    @id @default(uuid())
+  projectId    String    @unique
+  accessToken  String // ⚠️ Ideal: cifrado en reposo
+  refreshToken String?
+  tokenType    String?
+  scopes       String?
+  expiresAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Module {
+  id               String   @id @default(uuid())
+  projectId        String
+  parentModuleId   String?
+  name             String
+  description      String?
+  isRoot           Boolean  @default(false)
+  sortOrder        Int      @default(0)
+  path             String? // ej: "root/abc/def"
+  depth            Int? // ej: 0=root, 1=hijo, etc.
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  lastModifiedById String?
+  publishedVersionId String?
+
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent         Module?         @relation("ModuleChildren", fields: [parentModuleId], references: [id], onDelete: SetNull)
+  children       Module[]        @relation("ModuleChildren")
+  features       Feature[]
+  versions       ModuleVersion[]
+  lastModifiedBy User?           @relation("ModuleLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
+  publishedVersion   ModuleVersion? @relation("ModulePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, parentModuleId, name])
+  @@index([publishedVersionId])
+  @@index([projectId, parentModuleId, sortOrder])
+}
+
+model ModuleVersion {
+  id             String   @id @default(uuid())
+  moduleId       String
+  versionNumber  Int
+  name           String?
+  description    String?
+  parentModuleId String?
+  isRoot         Boolean?
+  changelog      String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  isRollback     Boolean  @default(false)
+  
+  // 🔒 Congela el árbol en ese momento
+  childrenPins Json? // [{ "moduleId": "mod-B", "versionNumber": 2 }, ...]
+  featurePins  Json? // [{ "featureId": "feat-9", "versionNumber": 4 }, ...]
+  module       Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  createdBy    User?  @relation("ModuleVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  publishedFor Module[] @relation("ModulePublished")
+
+  contentHash String?
+  @@unique([moduleId, contentHash])
+  @@unique([moduleId, versionNumber])
+  @@index([moduleId, versionNumber])
+}
+
+model Feature {
+  id               String           @id @default(uuid())
+  moduleId         String
+  name             String
+  description      String?
+  priority         FeaturePriority? @default(MEDIUM)
+  status           FeatureStatus    @default(PENDING)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  lastModifiedById String?
+  publishedVersionId String?
+  sortOrder        Int      @default(0)
+ 
+  module         Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  versions       FeatureVersion[]
+  issueElements    IssueElement[]
+  lastModifiedBy User?            @relation("FeatureLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
+  publishedVersion   FeatureVersion? @relation("FeaturePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([moduleId, name])
+  @@index([publishedVersionId])
+  @@index([moduleId, priority, status])
+  @@index([moduleId, sortOrder])
+}
+
+model FeatureVersion {
+  id            String           @id @default(uuid())
+  featureId     String
+  versionNumber Int
+  name          String?
+  description   String?
+  priority      FeaturePriority?
+  status        FeatureStatus?
+  changelog     String?
+  createdById   String?
+  createdAt     DateTime         @default(now())
+  isRollback    Boolean          @default(false)
+
+  feature   Feature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation("FeatureVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  publishedFor Feature[] @relation("FeaturePublished")
+
+  contentHash String?
+  @@unique([featureId, contentHash])
+  @@unique([featureId, versionNumber])
+  @@index([featureId, versionNumber])
+}
+
+model IssueElement {
+  id                String        @id @default(uuid())
+  featureId         String
+  githubIssueUrl    String?
+  pullRequestUrl    String?
+  repoOwner         String?
+  repoName          String?
+  githubIssueNumber Int?
+  githubPrNumber    Int?
+  commitHashes      String[]
+  reviewStatus      ReviewStatus?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  feature           Feature       @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@index([featureId])
+  @@index([repoOwner, repoName, githubIssueNumber])
+  @@index([repoOwner, repoName, githubPrNumber])
+}
