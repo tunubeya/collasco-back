@@ -49,6 +49,12 @@ enum ReviewStatus {
   CHANGES_REQUESTED
 }
 
+enum TestEvaluation {
+  NOT_WORKING
+  MINOR_ISSUE
+  PASSED
+}
+
 model User {
   id               String             @id @default(uuid())
   email            String             @unique
@@ -72,6 +78,7 @@ model User {
   ownedProjects    Project[]          @relation("ProjectOwner")
   // 🔥 Membresías N:M por proyecto (permisos por proyecto)
   memberships      ProjectMember[]
+  TestRun          TestRun[]
 }
 
 model UserRefreshToken {
@@ -86,16 +93,16 @@ model UserRefreshToken {
 }
 
 model GithubIdentity {
-  id           String    @id @default(uuid())
-  userId       String    @unique
+  id          String    @id @default(uuid())
+  userId      String    @unique
   //refreshToken String?
   //tokenType    String? // "Bearer"
   //scopes       String? // "repo,workflow"
-  expiresAt    DateTime?
-  accessToken  String // ⚠️ ideal: cifrado en reposo
-  username     String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  expiresAt   DateTime?
+  accessToken String // ⚠️ ideal: cifrado en reposo
+  username    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -153,27 +160,27 @@ model ProjectGithubCredential {
 }
 
 model Module {
-  id               String   @id @default(uuid())
-  projectId        String
-  parentModuleId   String?
-  name             String
-  description      String?
-  isRoot           Boolean  @default(false)
-  sortOrder        Int      @default(0)
-  path             String? // ej: "root/abc/def"
-  depth            Int? // ej: 0=root, 1=hijo, etc.
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  lastModifiedById String?
+  id                 String   @id @default(uuid())
+  projectId          String
+  parentModuleId     String?
+  name               String
+  description        String?
+  isRoot             Boolean  @default(false)
+  sortOrder          Int      @default(0)
+  path               String? // ej: "root/abc/def"
+  depth              Int? // ej: 0=root, 1=hijo, etc.
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  lastModifiedById   String?
   publishedVersionId String?
 
-  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  parent         Module?         @relation("ModuleChildren", fields: [parentModuleId], references: [id], onDelete: SetNull)
-  children       Module[]        @relation("ModuleChildren")
-  features       Feature[]
-  versions       ModuleVersion[]
-  lastModifiedBy User?           @relation("ModuleLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
-  publishedVersion   ModuleVersion? @relation("ModulePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  project          Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent           Module?         @relation("ModuleChildren", fields: [parentModuleId], references: [id], onDelete: SetNull)
+  children         Module[]        @relation("ModuleChildren")
+  features         Feature[]
+  versions         ModuleVersion[]
+  lastModifiedBy   User?           @relation("ModuleLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
+  publishedVersion ModuleVersion?  @relation("ModulePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
 
   @@unique([projectId, parentModuleId, name])
   @@index([publishedVersionId])
@@ -192,7 +199,7 @@ model ModuleVersion {
   createdById    String?
   createdAt      DateTime @default(now())
   isRollback     Boolean  @default(false)
-  
+
   // 🔒 Congela el árbol en ese momento
   childrenPins Json? // [{ "moduleId": "mod-B", "versionNumber": 2 }, ...]
   featurePins  Json? // [{ "featureId": "feat-9", "versionNumber": 4 }, ...]
@@ -202,29 +209,32 @@ model ModuleVersion {
   publishedFor Module[] @relation("ModulePublished")
 
   contentHash String?
+
   @@unique([moduleId, contentHash])
   @@unique([moduleId, versionNumber])
   @@index([moduleId, versionNumber])
 }
 
 model Feature {
-  id               String           @id @default(uuid())
-  moduleId         String
-  name             String
-  description      String?
-  priority         FeaturePriority? @default(MEDIUM)
-  status           FeatureStatus    @default(PENDING)
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  lastModifiedById String?
+  id                 String           @id @default(uuid())
+  moduleId           String
+  name               String
+  description        String?
+  priority           FeaturePriority? @default(MEDIUM)
+  status             FeatureStatus    @default(PENDING)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  lastModifiedById   String?
   publishedVersionId String?
-  sortOrder        Int      @default(0)
- 
-  module         Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
-  versions       FeatureVersion[]
+  sortOrder          Int              @default(0)
+
+  module           Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  versions         FeatureVersion[]
   issueElements    IssueElement[]
-  lastModifiedBy User?            @relation("FeatureLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
-  publishedVersion   FeatureVersion? @relation("FeaturePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  testCases        TestCase[]
+  testRuns         TestRun[]
+  lastModifiedBy   User?            @relation("FeatureLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
+  publishedVersion FeatureVersion?  @relation("FeaturePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
 
   @@unique([moduleId, name])
   @@index([publishedVersionId])
@@ -251,6 +261,7 @@ model FeatureVersion {
   publishedFor Feature[] @relation("FeaturePublished")
 
   contentHash String?
+
   @@unique([featureId, contentHash])
   @@unique([featureId, versionNumber])
   @@index([featureId, versionNumber])
@@ -274,4 +285,51 @@ model IssueElement {
   @@index([featureId])
   @@index([repoOwner, repoName, githubIssueNumber])
   @@index([repoOwner, repoName, githubPrNumber])
+}
+
+model TestCase {
+  id         String   @id @default(uuid())
+  featureId  String
+  name       String
+  steps      String?
+  expected   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  isArchived Boolean  @default(false)
+
+  feature Feature      @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  results TestResult[]
+
+  @@unique([featureId, name])
+  @@index([featureId])
+}
+
+model TestRun {
+  id        String   @id @default(uuid())
+  featureId String
+  runDate   DateTime @default(now())
+  runById   String?
+  notes     String?
+  createdAt DateTime @default(now())
+
+  feature Feature      @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  runBy   User?        @relation(fields: [runById], references: [id], onDelete: SetNull)
+  results TestResult[]
+
+  @@index([featureId, runDate])
+}
+
+model TestResult {
+  id         String         @id @default(uuid())
+  testRunId  String
+  testCaseId String
+  evaluation TestEvaluation
+  comment    String?
+  createdAt  DateTime       @default(now())
+
+  testRun  TestRun  @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+  testCase TestCase @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+
+  @@unique([testRunId, testCaseId])
+  @@index([testCaseId])
 }

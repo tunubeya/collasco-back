@@ -74,6 +74,7 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(200)
   async refresh(@Req() req: Request, @CurrentUser() user: RefreshTokenPayload) {
+    console.log("Refresing token");
     const oldRefreshToken = getBearerToken(req) ?? '';
     const tokens = await this.auth.rotateRefreshToken(
       { id: user.sub, email: user.email, role: user.role },

@@ -14,6 +14,7 @@ import { ProjectsModule } from './projects/projects.module';
 import { ModulesModule } from './modules/modules.module';
 import { FeaturesModule } from './features/features.module';
 import { GithubModule } from './github/github.module';
+import { QaModule } from './qa/qa.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -42,6 +43,7 @@ import { GithubModule } from './github/github.module';
     ModulesModule,
     FeaturesModule,
     GithubModule,
+    QaModule,
     // aquí irán tus módulos de dominio (UsersModule, ProjectsModule, etc.)
   ],
   providers: [

@@ -23,13 +23,13 @@ export class AuthService {
 
   private signAccessToken(payload: Record<string, any>) {
     return this.jwt.signAsync(payload, {
-      expiresIn: this.cfg.get<string>('JWT_ACCESS_TTL') || '15m',
+      expiresIn: this.cfg.get<string>('JWT_ACCESS_TTL') || '2m',
     });
   }
 
   private signRefreshToken(payload: Record<string, any>) {
     return this.jwt.signAsync(payload, {
-      expiresIn: this.cfg.get<string>('JWT_REFRESH_TTL') || '7d',
+      expiresIn: this.cfg.get<string>('JWT_REFRESH_TTL') || '15m',
     });
   }
 
