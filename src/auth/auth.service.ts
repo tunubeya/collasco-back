@@ -33,13 +33,23 @@ export class AuthService {
     });
   }
 
+  private getTokenExpirationDate(token: string): string | null {
+    const decoded = this.jwt.decode(token);
+    if (!decoded || typeof decoded !== 'object') return null;
+    const exp = (decoded as { exp?: number }).exp;
+    if (typeof exp !== 'number') return null;
+    return new Date(exp * 1000).toISOString();
+  }
+
   async issueTokensAndPersistRefresh(user: { id: string; role: UserRole; email: string }) {
     const base = { sub: user.id, role: user.role, email: user.email };
     const accessToken = await this.signAccessToken({ ...base, type: 'access' as const });
     const refreshToken = await this.signRefreshToken({ ...base, type: 'refresh' as const });
     await this.tokens.revokeAll(user.id);
     await this.tokens.saveNew(user.id, refreshToken);
-    return { accessToken, refreshToken };
+    const accessTokenExpirationDate = this.getTokenExpirationDate(accessToken);
+    const refreshTokenExpirationDate = this.getTokenExpirationDate(refreshToken);
+    return { accessToken, refreshToken, accessTokenExpirationDate, refreshTokenExpirationDate };
   }
 
   async rotateRefreshToken(
@@ -52,7 +62,14 @@ export class AuthService {
     await this.tokens.rotate(user.id, oldRefreshToken, newRefreshToken);
 
     const accessToken = await this.signAccessToken({ ...base, type: 'access' as const });
-    return { accessToken, refreshToken: newRefreshToken };
+    const accessTokenExpirationDate = this.getTokenExpirationDate(accessToken);
+    const refreshTokenExpirationDate = this.getTokenExpirationDate(newRefreshToken);
+    return {
+      accessToken,
+      refreshToken: newRefreshToken,
+      accessTokenExpirationDate,
+      refreshTokenExpirationDate,
+    };
   }
 
   async logout(userId: string) {
