@@ -23,13 +23,13 @@ export class AuthService {
 
   private signAccessToken(payload: Record<string, any>) {
     return this.jwt.signAsync(payload, {
-      expiresIn: this.cfg.get<string>('JWT_ACCESS_TTL') || '2m',
+      expiresIn: this.cfg.get<string>('JWT_ACCESS_TTL') || '15m',
     });
   }
 
   private signRefreshToken(payload: Record<string, any>) {
     return this.jwt.signAsync(payload, {
-      expiresIn: this.cfg.get<string>('JWT_REFRESH_TTL') || '15m',
+      expiresIn: this.cfg.get<string>('JWT_REFRESH_TTL') || '7d',
     });
   }
 
@@ -37,7 +37,7 @@ export class AuthService {
     const base = { sub: user.id, role: user.role, email: user.email };
     const accessToken = await this.signAccessToken({ ...base, type: 'access' as const });
     const refreshToken = await this.signRefreshToken({ ...base, type: 'refresh' as const });
-
+    await this.tokens.revokeAll(user.id);
     await this.tokens.saveNew(user.id, refreshToken);
     return { accessToken, refreshToken };
   }

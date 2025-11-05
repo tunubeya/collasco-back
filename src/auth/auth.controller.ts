@@ -59,7 +59,6 @@ export class AuthController {
       role: user.role,
       email: user.email,
     });
-    (console.log('Login user with email:', user.email, 'and password:'), req.body.password);
     return { user: { id: user.id, email: user.email, role: user.role }, ...tokens };
   }
 
@@ -70,6 +69,7 @@ export class AuthController {
     return { id: sub, email, role };
   }
 
+  @Public()
   @UseGuards(JwtRefreshGuard)
   @Post('refresh')
   @HttpCode(200)

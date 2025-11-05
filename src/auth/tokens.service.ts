@@ -10,18 +10,15 @@ export class TokensService {
   async hash(token: string): Promise<string> {
     return bcrypt.hash(token, 10);
   }
-
   async saveNew(userId: string, rawRefresh: string) {
     const tokenHash = await this.hash(rawRefresh);
     return this.prisma.userRefreshToken.create({
       data: { userId, tokenHash },
     });
   }
-
   async revokeAll(userId: string): Promise<void> {
-    await this.prisma.userRefreshToken.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
+    await this.prisma.userRefreshToken.deleteMany({
+      where: { userId },
     });
   }
 
@@ -42,9 +39,8 @@ export class TokensService {
 
     // 4) usar callback transaction (todo son PrismaPromises adentro)
     await this.prisma.$transaction(async (tx) => {
-      await tx.userRefreshToken.update({
+      await tx.userRefreshToken.delete({
         where: { id: active.id },
-        data: { revokedAt: new Date() },
       });
       await tx.userRefreshToken.create({
         data: { userId, tokenHash: newTokenHash },

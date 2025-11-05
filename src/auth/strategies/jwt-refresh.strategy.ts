@@ -20,6 +20,7 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
   }
 
   validate(payload: RefreshTokenPayload): RefreshTokenPayload | null {
-    return payload?.type === 'refresh' ? payload : null;
+    if (payload?.type !== 'refresh') return null;
+    return payload;
   }
 }
