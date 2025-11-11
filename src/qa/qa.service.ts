@@ -6,6 +6,7 @@ import { UpdateTestCaseDto } from './dto/update-test-case.dto';
 import { CreateTestRunDto, TestResultInput } from './dto/create-test-run.dto';
 import { UpsertResultsDto } from './dto/upsert-results.dto';
 import { assertProjectRead, assertProjectWrite } from './guards/rbac.helpers';
+import { CreateProjectTestRunDto } from './dto/create-project-test-run.dto';
 
 const testRunDetailInclude: Prisma.TestRunInclude = {
   feature: {
@@ -21,6 +22,12 @@ const testRunDetailInclude: Prisma.TestRunInclude = {
       },
     },
   },
+  project: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
   runBy: {
     select: {
       id: true,
@@ -30,14 +37,38 @@ const testRunDetailInclude: Prisma.TestRunInclude = {
   },
   results: {
     include: {
-      testCase: true,
+      testCase: {
+        include: {
+          feature: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      },
     },
   },
 };
 
-type TestRunDetail = Prisma.TestRunGetPayload<{
+type RunCoverage = {
+  scope: 'FEATURE' | 'PROJECT';
+  totalCases: number;
+  executedCases: number;
+  missingCases: number;
+  missingTestCases: Array<{
+    id: string;
+    name: string;
+    featureId: string;
+    featureName: string;
+  }>;
+};
+
+type TestRunRecord = Prisma.TestRunGetPayload<{
   include: typeof testRunDetailInclude;
 }>;
+
+type TestRunDetail = TestRunRecord & { coverage: RunCoverage };
 
 @Injectable()
 export class QaService {
@@ -127,6 +158,7 @@ export class QaService {
 
     const run = await this.prisma.testRun.create({
       data: {
+        projectId,
         featureId,
         runById: dto.runById,
         notes: dto.notes,
@@ -148,20 +180,55 @@ export class QaService {
     return this.getTestRunDetail(run.id);
   }
 
+  async createProjectTestRun(userId: string, projectId: string, dto: CreateProjectTestRunDto): Promise<TestRunDetail> {
+    await assertProjectWrite(this.prisma, userId, projectId);
+
+    const results = dto.results ?? [];
+    if (results.length === 0) {
+      throw new BadRequestException('At least one test case result is required for a project-level run.');
+    }
+    this.ensureUniqueTestCaseIds(results);
+    await this.validateTestCasesBelongToProject(projectId, results.map((r) => r.testCaseId));
+
+    const run = await this.prisma.testRun.create({
+      data: {
+        projectId,
+        featureId: null,
+        runById: dto.runById,
+        notes: dto.notes,
+      },
+    });
+
+    await this.prisma.testResult.createMany({
+      data: results.map((result) => ({
+        testRunId: run.id,
+        testCaseId: result.testCaseId,
+        evaluation: result.evaluation,
+        comment: result.comment,
+      })),
+      skipDuplicates: true,
+    });
+
+    return this.getTestRunDetail(run.id);
+  }
+
   async upsertResults(userId: string, runId: string, dto: UpsertResultsDto): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
-      select: { id: true, featureId: true },
+      select: { id: true, featureId: true, projectId: true },
     });
     if (!run) {
       throw new NotFoundException('Test run not found.');
     }
 
-    const projectId = await this.getProjectIdOrThrow(run.featureId);
-    await assertProjectWrite(this.prisma, userId, projectId);
+    await assertProjectWrite(this.prisma, userId, run.projectId);
 
     this.ensureUniqueTestCaseIds(dto.results);
-    await this.validateTestCasesBelongToFeature(run.featureId, dto.results.map((r) => r.testCaseId));
+    if (run.featureId) {
+      await this.validateTestCasesBelongToFeature(run.featureId, dto.results.map((r) => r.testCaseId));
+    } else {
+      await this.validateTestCasesBelongToProject(run.projectId, dto.results.map((r) => r.testCaseId));
+    }
 
     await this.prisma.$transaction(
       dto.results.map((result) =>
@@ -192,14 +259,13 @@ export class QaService {
   async getTestRun(userId: string, runId: string): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
-      select: { featureId: true },
+      select: { projectId: true },
     });
     if (!run) {
       throw new NotFoundException('Test run not found.');
     }
 
-    const projectId = await this.getProjectIdOrThrow(run.featureId);
-    await assertProjectRead(this.prisma, userId, projectId);
+    await assertProjectRead(this.prisma, userId, run.projectId);
 
     return this.getTestRunDetail(runId);
   }
@@ -222,6 +288,29 @@ export class QaService {
       id: run.id,
       runDate: run.runDate,
       by: run.runBy?.name ?? null,
+      summary: this.buildSummary(run.results.map((r) => r.evaluation)),
+    }));
+  }
+
+  async listProjectTestRuns(userId: string, projectId: string, limit: number) {
+    await assertProjectRead(this.prisma, userId, projectId);
+
+    const runs = await this.prisma.testRun.findMany({
+      where: { projectId },
+      orderBy: { runDate: 'desc' },
+      take: limit,
+      include: {
+        runBy: { select: { name: true } },
+        feature: { select: { id: true, name: true } },
+        results: { select: { evaluation: true } },
+      },
+    });
+
+    return runs.map((run) => ({
+      id: run.id,
+      runDate: run.runDate,
+      by: run.runBy?.name ?? null,
+      feature: run.feature ? { id: run.feature.id, name: run.feature.name } : null,
       summary: this.buildSummary(run.results.map((r) => r.evaluation)),
     }));
   }
@@ -295,6 +384,27 @@ export class QaService {
     }
   }
 
+  private async validateTestCasesBelongToProject(projectId: string, testCaseIds: string[]): Promise<void> {
+    if (testCaseIds.length === 0) {
+      return;
+    }
+
+    const uniqueIds = Array.from(new Set(testCaseIds));
+    const count = await this.prisma.testCase.count({
+      where: {
+        id: { in: uniqueIds },
+        feature: {
+          module: {
+            projectId,
+          },
+        },
+      },
+    });
+    if (count !== uniqueIds.length) {
+      throw new BadRequestException('One or more test cases do not belong to the project.');
+    }
+  }
+
   private async getProjectIdOrThrow(featureId: string): Promise<string> {
     const projectId = await this.getProjectIdByFeature(featureId);
     if (!projectId) {
@@ -311,6 +421,75 @@ export class QaService {
     if (!run) {
       throw new NotFoundException('Test run not found.');
     }
-    return run;
+    const coverage = await this.buildCoverage(run);
+    return {
+      ...run,
+      coverage,
+    };
+  }
+
+  private async buildCoverage(run: TestRunRecord): Promise<RunCoverage> {
+    const executedIds = new Set(run.results.map((result) => result.testCaseId));
+    if (run.featureId) {
+      const cases = await this.prisma.testCase.findMany({
+        where: { featureId: run.featureId, isArchived: false },
+        select: {
+          id: true,
+          name: true,
+          featureId: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      const missing = cases.filter((testCase) => !executedIds.has(testCase.id));
+      const featureName = run.feature?.name ?? 'Unknown feature';
+      return {
+        scope: 'FEATURE',
+        totalCases: cases.length,
+        executedCases: cases.length - missing.length,
+        missingCases: missing.length,
+        missingTestCases: missing.map((testCase) => ({
+          id: testCase.id,
+          name: testCase.name,
+          featureId: testCase.featureId,
+          featureName,
+        })),
+      };
+    }
+
+    const projectCases = await this.prisma.testCase.findMany({
+      where: {
+        feature: {
+          module: {
+            projectId: run.project.id,
+          },
+        },
+        isArchived: false,
+      },
+      select: {
+        id: true,
+        name: true,
+        featureId: true,
+        feature: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const missingProjectCases = projectCases.filter((testCase) => !executedIds.has(testCase.id));
+    return {
+      scope: 'PROJECT',
+      totalCases: projectCases.length,
+      executedCases: projectCases.length - missingProjectCases.length,
+      missingCases: missingProjectCases.length,
+      missingTestCases: missingProjectCases.map((testCase) => ({
+        id: testCase.id,
+        name: testCase.name,
+        featureId: testCase.featureId,
+        featureName: testCase.feature?.name ?? 'Unknown feature',
+      })),
+    };
   }
 }

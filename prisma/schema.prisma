@@ -127,6 +127,7 @@ model Project {
   githubCredential ProjectGithubCredential?
   // Estructura funcional
   modules          Module[]
+  testRuns         TestRun[]
 
   @@unique([ownerId, slug])
   @@index([ownerId])
@@ -306,17 +307,20 @@ model TestCase {
 
 model TestRun {
   id        String   @id @default(uuid())
-  featureId String
+  projectId String
+  featureId String?
   runDate   DateTime @default(now())
   runById   String?
   notes     String?
   createdAt DateTime @default(now())
 
-  feature Feature      @relation(fields: [featureId], references: [id], onDelete: Cascade)
-  runBy   User?        @relation(fields: [runById], references: [id], onDelete: SetNull)
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  feature Feature?    @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  runBy   User?       @relation(fields: [runById], references: [id], onDelete: SetNull)
   results TestResult[]
 
   @@index([featureId, runDate])
+  @@index([projectId, runDate])
 }
 
 model TestResult {
