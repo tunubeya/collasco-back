@@ -483,11 +483,23 @@ export class QaService {
     }));
   }
 
-  async listProjectTestRuns(userId: string, projectId: string, limit: number) {
+  async listProjectTestRuns(
+    userId: string,
+    projectId: string,
+    limit: number,
+    scope: 'ALL' | 'PROJECT' | 'FEATURE' = 'ALL',
+  ) {
     await assertProjectRead(this.prisma, userId, projectId);
 
+    const scopeFilter =
+      scope === 'PROJECT'
+        ? { featureId: null }
+        : scope === 'FEATURE'
+          ? { featureId: { not: null } }
+          : {};
+
     const runs = await this.prisma.testRun.findMany({
-      where: { projectId },
+      where: { projectId, ...scopeFilter },
       orderBy: { runDate: 'desc' },
       take: limit,
       include: {

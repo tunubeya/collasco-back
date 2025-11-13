@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -119,11 +120,22 @@ export class QaController {
     @CurrentUser() user: AccessTokenPayload | undefined,
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Query('limit') limit?: string,
+    @Query('scope') scope?: string,
   ) {
     const userId = this.resolveUserId(user);
     const parsedLimit = Number(limit ?? 10);
-    const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(Math.floor(parsedLimit), 50) : 10;
-    return this.qaService.listProjectTestRuns(userId, projectId, safeLimit);
+    const safeLimit =
+      Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(Math.floor(parsedLimit), 50) : 10;
+    const normalizedScope = (scope ?? 'ALL').toUpperCase();
+    if (!['ALL', 'PROJECT', 'FEATURE'].includes(normalizedScope)) {
+      throw new BadRequestException('Invalid scope. Use ALL, PROJECT, or FEATURE.');
+    }
+    return this.qaService.listProjectTestRuns(
+      userId,
+      projectId,
+      safeLimit,
+      normalizedScope as 'ALL' | 'PROJECT' | 'FEATURE',
+    );
   }
 
   @Get('features/:featureId/test-health')
