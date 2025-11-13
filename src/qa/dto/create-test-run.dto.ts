@@ -1,13 +1,5 @@
 import { TestEvaluation } from '@prisma/client';
-import {
-  ArrayMinSize,
-  IsArray,
-  IsEnum,
-  IsOptional,
-  IsString,
-  IsUUID,
-  ValidateNested,
-} from 'class-validator';
+import { ArrayMinSize, IsArray, IsEnum, IsOptional, IsString, IsUUID, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class TestResultInput {
@@ -23,6 +15,14 @@ export class TestResultInput {
 }
 
 export class CreateTestRunDto {
+  @IsString()
+  @MinLength(1)
+  name!: string;
+
+  @IsString()
+  @MinLength(1)
+  environment!: string;
+
   @IsOptional()
   @IsUUID()
   runById?: string;
@@ -38,4 +38,3 @@ export class CreateTestRunDto {
   @Type(() => TestResultInput)
   results?: TestResultInput[];
 }
-

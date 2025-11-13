@@ -1,8 +1,16 @@
-import { ArrayMinSize, IsArray, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsOptional, IsString, IsUUID, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { TestResultInput } from './create-test-run.dto';
 
 export class CreateProjectTestRunDto {
+  @IsString()
+  @MinLength(1)
+  name!: string;
+
+  @IsString()
+  @MinLength(1)
+  environment!: string;
+
   @IsOptional()
   @IsUUID()
   runById?: string;

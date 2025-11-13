@@ -14,8 +14,9 @@ import { QaService } from './qa.service';
 import { CreateTestCasesDto } from './dto/create-test-cases.dto';
 import { UpdateTestCaseDto } from './dto/update-test-case.dto';
 import { CreateTestRunDto } from './dto/create-test-run.dto';
-import { UpsertResultsDto } from './dto/upsert-results.dto';
 import { CreateProjectTestRunDto } from './dto/create-project-test-run.dto';
+import { UpsertResultsDto } from './dto/upsert-results.dto';
+import { UpdateTestRunDto } from './dto/update-test-run.dto';
 
 @Controller('qa')
 export class QaController {
@@ -80,6 +81,16 @@ export class QaController {
   ) {
     const userId = this.resolveUserId(user);
     return this.qaService.upsertResults(userId, runId, dto);
+  }
+
+  @Patch('test-runs/:runId')
+  async updateTestRun(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('runId', ParseUUIDPipe) runId: string,
+    @Body() dto: UpdateTestRunDto,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.updateTestRun(userId, runId, dto);
   }
 
   @Get('test-runs/:runId')

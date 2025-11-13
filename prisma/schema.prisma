@@ -312,6 +312,8 @@ model TestRun {
   runDate   DateTime @default(now())
   runById   String?
   notes     String?
+  name      String   @default("Unnamed run")
+  environment String @default("unspecified")
   createdAt DateTime @default(now())
 
   project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)

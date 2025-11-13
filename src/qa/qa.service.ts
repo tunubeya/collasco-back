@@ -7,6 +7,7 @@ import { CreateTestRunDto, TestResultInput } from './dto/create-test-run.dto';
 import { UpsertResultsDto } from './dto/upsert-results.dto';
 import { assertProjectRead, assertProjectWrite } from './guards/rbac.helpers';
 import { CreateProjectTestRunDto } from './dto/create-project-test-run.dto';
+import { UpdateTestRunDto } from './dto/update-test-run.dto';
 
 const testRunDetailInclude: Prisma.TestRunInclude = {
   feature: {
@@ -148,18 +149,26 @@ export class QaService {
     });
   }
 
-  async createTestRun(userId: string, featureId: string, dto: CreateTestRunDto): Promise<TestRunDetail> {
+  async createTestRun(
+    userId: string,
+    featureId: string,
+    dto: CreateTestRunDto,
+  ): Promise<TestRunDetail> {
     const projectId = await this.getProjectIdOrThrow(featureId);
     await assertProjectWrite(this.prisma, userId, projectId);
 
     const results = dto.results ?? [];
     this.ensureUniqueTestCaseIds(results);
-    await this.validateTestCasesBelongToFeature(featureId, results.map((r) => r.testCaseId));
-
+    await this.validateTestCasesBelongToFeature(
+      featureId,
+      results.map((r) => r.testCaseId),
+    );
     const run = await this.prisma.testRun.create({
       data: {
         projectId,
         featureId,
+        name: dto.name,
+        environment: dto.environment,
         runById: dto.runById,
         notes: dto.notes,
       },
@@ -179,21 +188,31 @@ export class QaService {
 
     return this.getTestRunDetail(run.id);
   }
-
-  async createProjectTestRun(userId: string, projectId: string, dto: CreateProjectTestRunDto): Promise<TestRunDetail> {
+  async createProjectTestRun(
+    userId: string,
+    projectId: string,
+    dto: CreateProjectTestRunDto,
+  ): Promise<TestRunDetail> {
     await assertProjectWrite(this.prisma, userId, projectId);
 
     const results = dto.results ?? [];
     if (results.length === 0) {
-      throw new BadRequestException('At least one test case result is required for a project-level run.');
+      throw new BadRequestException(
+        'At least one test case result is required for a project-level run.',
+      );
     }
     this.ensureUniqueTestCaseIds(results);
-    await this.validateTestCasesBelongToProject(projectId, results.map((r) => r.testCaseId));
+    await this.validateTestCasesBelongToProject(
+      projectId,
+      results.map((r) => r.testCaseId),
+    );
 
     const run = await this.prisma.testRun.create({
       data: {
         projectId,
         featureId: null,
+        name: dto.name,
+        environment: dto.environment,
         runById: dto.runById,
         notes: dto.notes,
       },
@@ -212,7 +231,95 @@ export class QaService {
     return this.getTestRunDetail(run.id);
   }
 
-  async upsertResults(userId: string, runId: string, dto: UpsertResultsDto): Promise<TestRunDetail> {
+  async updateTestRun(userId: string, runId: string, dto: UpdateTestRunDto): Promise<TestRunDetail> {
+    const run = await this.prisma.testRun.findUnique({
+      where: { id: runId },
+      select: { id: true, projectId: true, featureId: true },
+    });
+    if (!run) {
+      throw new NotFoundException('Test run not found.');
+    }
+
+    await assertProjectWrite(this.prisma, userId, run.projectId);
+
+    const updateData: Prisma.TestRunUpdateInput = {};
+    if (dto.name !== undefined) {
+      updateData.name = dto.name;
+    }
+    if (dto.environment !== undefined) {
+      updateData.environment = dto.environment;
+    }
+    if (dto.notes !== undefined) {
+      updateData.notes = dto.notes;
+    }
+
+    const metadataChanges = Object.keys(updateData).length > 0;
+    const addOrUpdateResults = dto.results ?? [];
+    const removals = dto.removeTestCaseIds ?? [];
+    const resultChanges = addOrUpdateResults.length > 0 || removals.length > 0;
+
+    if (!metadataChanges && !resultChanges) {
+      throw new BadRequestException('Nothing to update.');
+    }
+
+    if (metadataChanges) {
+      await this.prisma.testRun.update({
+        where: { id: runId },
+        data: updateData,
+      });
+    }
+
+    if (addOrUpdateResults.length > 0) {
+      this.ensureUniqueTestCaseIds(addOrUpdateResults);
+
+      const testCaseIds = addOrUpdateResults.map((r) => r.testCaseId);
+      if (run.featureId) {
+        await this.validateTestCasesBelongToFeature(run.featureId, testCaseIds);
+      } else {
+        await this.validateTestCasesBelongToProject(run.projectId, testCaseIds);
+      }
+
+      await this.prisma.$transaction(
+        addOrUpdateResults.map((result) =>
+          this.prisma.testResult.upsert({
+            where: {
+              testRunId_testCaseId: {
+                testRunId: runId,
+                testCaseId: result.testCaseId,
+              },
+            },
+            create: {
+              testRunId: runId,
+              testCaseId: result.testCaseId,
+              evaluation: result.evaluation,
+              comment: result.comment ?? null,
+            },
+            update: {
+              evaluation: result.evaluation,
+              comment: result.comment ?? null,
+            },
+          }),
+        ),
+      );
+    }
+
+    if (removals.length > 0) {
+      await this.prisma.testResult.deleteMany({
+        where: {
+          testRunId: runId,
+          testCaseId: { in: removals },
+        },
+      });
+    }
+
+    return this.getTestRunDetail(runId);
+  }
+
+  async upsertResults(
+    userId: string,
+    runId: string,
+    dto: UpsertResultsDto,
+  ): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
       select: { id: true, featureId: true, projectId: true },
@@ -225,9 +332,15 @@ export class QaService {
 
     this.ensureUniqueTestCaseIds(dto.results);
     if (run.featureId) {
-      await this.validateTestCasesBelongToFeature(run.featureId, dto.results.map((r) => r.testCaseId));
+      await this.validateTestCasesBelongToFeature(
+        run.featureId,
+        dto.results.map((r) => r.testCaseId),
+      );
     } else {
-      await this.validateTestCasesBelongToProject(run.projectId, dto.results.map((r) => r.testCaseId));
+      await this.validateTestCasesBelongToProject(
+        run.projectId,
+        dto.results.map((r) => r.testCaseId),
+      );
     }
 
     await this.prisma.$transaction(
@@ -287,6 +400,8 @@ export class QaService {
     return runs.map((run) => ({
       id: run.id,
       runDate: run.runDate,
+      name: run.name,
+      environment: run.environment,
       by: run.runBy?.name ?? null,
       summary: this.buildSummary(run.results.map((r) => r.evaluation)),
     }));
@@ -309,6 +424,8 @@ export class QaService {
     return runs.map((run) => ({
       id: run.id,
       runDate: run.runDate,
+      name: run.name,
+      environment: run.environment,
       by: run.runBy?.name ?? null,
       feature: run.feature ? { id: run.feature.id, name: run.feature.name } : null,
       summary: this.buildSummary(run.results.map((r) => r.evaluation)),
@@ -334,7 +451,9 @@ export class QaService {
     }
 
     const total = latestRun.results.length;
-    const passed = latestRun.results.filter((result) => result.evaluation === TestEvaluation.PASSED).length;
+    const passed = latestRun.results.filter(
+      (result) => result.evaluation === TestEvaluation.PASSED,
+    ).length;
     const passRate = total > 0 ? passed / total : null;
 
     return {
@@ -367,7 +486,10 @@ export class QaService {
     }
   }
 
-  private async validateTestCasesBelongToFeature(featureId: string, testCaseIds: string[]): Promise<void> {
+  private async validateTestCasesBelongToFeature(
+    featureId: string,
+    testCaseIds: string[],
+  ): Promise<void> {
     if (testCaseIds.length === 0) {
       return;
     }
@@ -384,7 +506,10 @@ export class QaService {
     }
   }
 
-  private async validateTestCasesBelongToProject(projectId: string, testCaseIds: string[]): Promise<void> {
+  private async validateTestCasesBelongToProject(
+    projectId: string,
+    testCaseIds: string[],
+  ): Promise<void> {
     if (testCaseIds.length === 0) {
       return;
     }
