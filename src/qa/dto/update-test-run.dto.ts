@@ -1,14 +1,5 @@
 import { Type } from 'class-transformer';
-import {
-  ArrayMinSize,
-  ArrayUnique,
-  IsArray,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MinLength,
-  ValidateNested,
-} from 'class-validator';
+import { ArrayMinSize, ArrayUnique, IsArray, IsOptional, IsString, IsUUID, MinLength, ValidateNested } from 'class-validator';
 import { TestResultInput } from './create-test-run.dto';
 
 export class UpdateTestRunDto {
@@ -38,5 +29,10 @@ export class UpdateTestRunDto {
   @ArrayUnique()
   @IsUUID('4', { each: true })
   removeTestCaseIds?: string[];
-}
 
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  addTestCaseIds?: string[];
+}

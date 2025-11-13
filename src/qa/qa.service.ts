@@ -163,6 +163,8 @@ export class QaService {
       featureId,
       results.map((r) => r.testCaseId),
     );
+    const targetScope = await this.resolveTargetScope(projectId, featureId, dto.targetTestCaseIds);
+
     const run = await this.prisma.testRun.create({
       data: {
         projectId,
@@ -171,6 +173,8 @@ export class QaService {
         environment: dto.environment,
         runById: dto.runById,
         notes: dto.notes,
+        targetCaseIds: targetScope.targetCaseIds,
+        isTargetScopeCustom: targetScope.isCustom,
       },
     });
 
@@ -207,6 +211,8 @@ export class QaService {
       results.map((r) => r.testCaseId),
     );
 
+    const targetScope = await this.resolveTargetScope(projectId, null, dto.targetTestCaseIds);
+
     const run = await this.prisma.testRun.create({
       data: {
         projectId,
@@ -215,6 +221,8 @@ export class QaService {
         environment: dto.environment,
         runById: dto.runById,
         notes: dto.notes,
+        targetCaseIds: targetScope.targetCaseIds,
+        isTargetScopeCustom: targetScope.isCustom,
       },
     });
 
@@ -234,7 +242,7 @@ export class QaService {
   async updateTestRun(userId: string, runId: string, dto: UpdateTestRunDto): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
-      select: { id: true, projectId: true, featureId: true },
+      select: { id: true, projectId: true, featureId: true, targetCaseIds: true, isTargetScopeCustom: true },
     });
     if (!run) {
       throw new NotFoundException('Test run not found.');
@@ -242,41 +250,59 @@ export class QaService {
 
     await assertProjectWrite(this.prisma, userId, run.projectId);
 
-    const updateData: Prisma.TestRunUpdateInput = {};
+    const runUpdateData: Prisma.TestRunUpdateInput = {};
     if (dto.name !== undefined) {
-      updateData.name = dto.name;
+      runUpdateData.name = dto.name;
     }
     if (dto.environment !== undefined) {
-      updateData.environment = dto.environment;
+      runUpdateData.environment = dto.environment;
     }
     if (dto.notes !== undefined) {
-      updateData.notes = dto.notes;
+      runUpdateData.notes = dto.notes;
     }
 
-    const metadataChanges = Object.keys(updateData).length > 0;
     const addOrUpdateResults = dto.results ?? [];
     const removals = dto.removeTestCaseIds ?? [];
-    const resultChanges = addOrUpdateResults.length > 0 || removals.length > 0;
+    const additions = dto.addTestCaseIds ?? [];
 
-    if (!metadataChanges && !resultChanges) {
+    const hasPayloadChanges =
+      Object.keys(runUpdateData).length > 0 ||
+      addOrUpdateResults.length > 0 ||
+      removals.length > 0 ||
+      additions.length > 0;
+
+    if (!hasPayloadChanges) {
       throw new BadRequestException('Nothing to update.');
     }
 
-    if (metadataChanges) {
-      await this.prisma.testRun.update({
-        where: { id: runId },
-        data: updateData,
-      });
+    const hadCustomTargets = run.isTargetScopeCustom;
+    let hasCustomTargets = hadCustomTargets;
+    const currentTargets = this.buildTargetCaseSet(run.targetCaseIds);
+    let targetsChanged = false;
+
+    if (additions.length > 0) {
+      await this.assertCasesBelongToScope(run.projectId, run.featureId, additions);
+      hasCustomTargets = true;
+      for (const id of additions) {
+        if (!currentTargets.has(id)) {
+          currentTargets.add(id);
+          targetsChanged = true;
+        }
+      }
     }
 
     if (addOrUpdateResults.length > 0) {
       this.ensureUniqueTestCaseIds(addOrUpdateResults);
-
       const testCaseIds = addOrUpdateResults.map((r) => r.testCaseId);
-      if (run.featureId) {
-        await this.validateTestCasesBelongToFeature(run.featureId, testCaseIds);
-      } else {
-        await this.validateTestCasesBelongToProject(run.projectId, testCaseIds);
+      await this.assertCasesBelongToScope(run.projectId, run.featureId, testCaseIds);
+
+      if (hasCustomTargets) {
+        for (const id of testCaseIds) {
+          if (!currentTargets.has(id)) {
+            currentTargets.add(id);
+            targetsChanged = true;
+          }
+        }
       }
 
       await this.prisma.$transaction(
@@ -304,11 +330,44 @@ export class QaService {
     }
 
     if (removals.length > 0) {
+      if (!hasCustomTargets) {
+        const scopeCaseIds = await this.listScopeTestCaseIds(run.projectId, run.featureId);
+        for (const id of scopeCaseIds) {
+          currentTargets.add(id);
+        }
+        hasCustomTargets = true;
+      }
+
       await this.prisma.testResult.deleteMany({
         where: {
           testRunId: runId,
           testCaseId: { in: removals },
         },
+      });
+
+      for (const id of removals) {
+        if (currentTargets.delete(id)) {
+          targetsChanged = true;
+        }
+      }
+    }
+
+    if (hasCustomTargets) {
+      if (targetsChanged || !hadCustomTargets) {
+        runUpdateData.targetCaseIds = Array.from(currentTargets);
+      }
+      if (!hadCustomTargets) {
+        runUpdateData.isTargetScopeCustom = true;
+      }
+    } else if (hadCustomTargets) {
+      runUpdateData.targetCaseIds = [];
+      runUpdateData.isTargetScopeCustom = false;
+    }
+
+    if (Object.keys(runUpdateData).length > 0) {
+      await this.prisma.testRun.update({
+        where: { id: runId },
+        data: runUpdateData,
       });
     }
 
@@ -322,7 +381,7 @@ export class QaService {
   ): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
-      select: { id: true, featureId: true, projectId: true },
+      select: { id: true, featureId: true, projectId: true, targetCaseIds: true, isTargetScopeCustom: true },
     });
     if (!run) {
       throw new NotFoundException('Test run not found.');
@@ -365,6 +424,23 @@ export class QaService {
         }),
       ),
     );
+
+    if (run.isTargetScopeCustom) {
+      const currentTargets = this.buildTargetCaseSet(run.targetCaseIds);
+      let targetsChanged = false;
+      for (const id of dto.results.map((r) => r.testCaseId)) {
+        if (!currentTargets.has(id)) {
+          currentTargets.add(id);
+          targetsChanged = true;
+        }
+      }
+      if (targetsChanged) {
+        await this.prisma.testRun.update({
+          where: { id: runId },
+          data: { targetCaseIds: Array.from(currentTargets) },
+        });
+      }
+    }
 
     return this.getTestRunDetail(runId);
   }
@@ -530,6 +606,61 @@ export class QaService {
     }
   }
 
+  private async resolveTargetScope(
+    projectId: string,
+    featureId: string | null,
+    explicitIds?: string[],
+  ): Promise<{ targetCaseIds: string[]; isCustom: boolean }> {
+    const uniqueExplicit = explicitIds?.length ? Array.from(new Set(explicitIds)) : null;
+    if (uniqueExplicit?.length) {
+      await this.assertCasesBelongToScope(projectId, featureId, uniqueExplicit);
+      return { targetCaseIds: uniqueExplicit, isCustom: true };
+    }
+    return { targetCaseIds: [], isCustom: false };
+  }
+
+  private buildTargetCaseSet(targetCaseIds: string[] | null | undefined): Set<string> {
+    return new Set(targetCaseIds ?? []);
+  }
+
+  private async assertCasesBelongToScope(
+    projectId: string,
+    featureId: string | null,
+    testCaseIds: string[],
+  ): Promise<void> {
+    if (testCaseIds.length === 0) {
+      return;
+    }
+    if (featureId) {
+      await this.validateTestCasesBelongToFeature(featureId, testCaseIds);
+    } else {
+      await this.validateTestCasesBelongToProject(projectId, testCaseIds);
+    }
+  }
+
+  private async listScopeTestCaseIds(projectId: string, featureId: string | null): Promise<string[]> {
+    if (featureId) {
+      const cases = await this.prisma.testCase.findMany({
+        where: { featureId, isArchived: false },
+        select: { id: true },
+      });
+      return cases.map((testCase) => testCase.id);
+    }
+
+    const projectCases = await this.prisma.testCase.findMany({
+      where: {
+        feature: {
+          module: {
+            projectId,
+          },
+        },
+        isArchived: false,
+      },
+      select: { id: true },
+    });
+    return projectCases.map((testCase) => testCase.id);
+  }
+
   private async getProjectIdOrThrow(featureId: string): Promise<string> {
     const projectId = await this.getProjectIdByFeature(featureId);
     if (!projectId) {
@@ -555,6 +686,45 @@ export class QaService {
 
   private async buildCoverage(run: TestRunRecord): Promise<RunCoverage> {
     const executedIds = new Set(run.results.map((result) => result.testCaseId));
+    if (run.isTargetScopeCustom) {
+      if (run.targetCaseIds.length === 0) {
+        return {
+          scope: run.featureId ? 'FEATURE' : 'PROJECT',
+          totalCases: 0,
+          executedCases: 0,
+          missingCases: 0,
+          missingTestCases: [],
+        };
+      }
+      const targetCases = await this.prisma.testCase.findMany({
+        where: { id: { in: run.targetCaseIds } },
+        select: {
+          id: true,
+          name: true,
+          featureId: true,
+          feature: { select: { id: true, name: true } },
+        },
+      });
+      const orderMap = new Map(targetCases.map((testCase) => [testCase.id, testCase]));
+      const orderedCases = run.targetCaseIds
+        .map((id) => orderMap.get(id))
+        .filter((testCase): testCase is (typeof targetCases)[number] => Boolean(testCase));
+      const missingPlannedCases = orderedCases.filter((testCase) => !executedIds.has(testCase.id));
+      const executedPlannedCases = orderedCases.length - missingPlannedCases.length;
+      return {
+        scope: run.featureId ? 'FEATURE' : 'PROJECT',
+        totalCases: orderedCases.length,
+        executedCases: executedPlannedCases,
+        missingCases: missingPlannedCases.length,
+        missingTestCases: missingPlannedCases.map((testCase) => ({
+          id: testCase.id,
+          name: testCase.name,
+          featureId: testCase.featureId,
+          featureName: testCase.feature?.name ?? 'Unknown feature',
+        })),
+      };
+    }
+
     if (run.featureId) {
       const cases = await this.prisma.testCase.findMany({
         where: { featureId: run.featureId, isArchived: false },

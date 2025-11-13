@@ -1,4 +1,4 @@
-import { ArrayMinSize, IsArray, IsOptional, IsString, IsUUID, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMinSize, ArrayUnique, IsArray, IsOptional, IsString, IsUUID, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { TestResultInput } from './create-test-run.dto';
 
@@ -24,5 +24,10 @@ export class CreateProjectTestRunDto {
   @ValidateNested({ each: true })
   @Type(() => TestResultInput)
   results!: TestResultInput[];
-}
 
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  targetTestCaseIds?: string[];
+}

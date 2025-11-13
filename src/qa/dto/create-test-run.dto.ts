@@ -1,5 +1,15 @@
 import { TestEvaluation } from '@prisma/client';
-import { ArrayMinSize, IsArray, IsEnum, IsOptional, IsString, IsUUID, MinLength, ValidateNested } from 'class-validator';
+import {
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class TestResultInput {
@@ -37,4 +47,10 @@ export class CreateTestRunDto {
   @ValidateNested({ each: true })
   @Type(() => TestResultInput)
   results?: TestResultInput[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  targetTestCaseIds?: string[];
 }
