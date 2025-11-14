@@ -14,6 +14,8 @@ import { RegisterClientDto } from '../users/dto/register-client.dto';
 import type { UserRole } from '@prisma/client';
 import { getBearerToken } from './bearer.util';
 import { ChangePasswordDto } from 'src/users/dto/change-password.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 type LocalAuthedUser = { id: string; email: string; role: UserRole };
 @Controller('auth')
@@ -119,5 +121,20 @@ export class AuthController {
 
     await this.auth.changePassword(user.sub, dto.currentPassword, dto.newPassword);
     return { message: 'passwordUpdated' };
+  }
+
+  @Public()
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    console.log("forgot pass");
+    
+    return this.auth.requestPasswordReset(dto.email);
+  }
+
+  @Public()
+  @Post('reset-password')
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.auth.resetPassword(dto.token, dto.newPassword);
+    return { message: 'passwordReset' };
   }
 }

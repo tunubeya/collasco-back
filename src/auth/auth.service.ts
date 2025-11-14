@@ -5,6 +5,8 @@ import { ConfigService } from '@nestjs/config';
 import { TokensService } from './tokens.service';
 import type { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { createHash, randomBytes } from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -13,6 +15,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly cfg: ConfigService,
     private readonly tokens: TokensService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async validateLocal(email: string, password: string) {
@@ -100,5 +103,92 @@ export class AuthService {
 
     const newHash = await bcrypt.hash(newPassword, 12);
     await this.users.updatePasswordHash(userId, newHash);
+  }
+
+  async requestPasswordReset(rawEmail: string): Promise<{ message: string; token?: string }> {
+    const email = rawEmail.trim().toLowerCase();
+    const user = await this.users.findByEmail(email);
+    if (!user) {
+      return { message: 'resetEmailSent' };
+    }
+
+    await this.prisma.passwordResetToken.deleteMany({ where: { userId: user.id } });
+
+    const token = randomBytes(32).toString('hex');
+    const tokenHash = this.hashResetToken(token);
+    const expiresAt = new Date(Date.now() + this.getResetTtlMs());
+
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    this.sendPasswordResetEmail(user.email, token);
+
+    const response: { message: string; token?: string } = { message: 'resetEmailSent' };
+    if ((this.cfg.get<string>('NODE_ENV') ?? 'development') !== 'production') {
+      response.token = token;
+    }
+    return response;
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    if (!token) {
+      throw new BadRequestException('invalidToken');
+    }
+    if (newPassword.length < 8) {
+      throw new BadRequestException('weakPassword');
+    }
+
+    const tokenHash = this.hashResetToken(token);
+    const record = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+    });
+    if (!record || record.usedAt || record.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException('invalidOrExpiredToken');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: record.userId },
+      select: { passwordHash: true },
+    });
+    if (!user) {
+      throw new BadRequestException('invalidToken');
+    }
+
+    const same = await bcrypt.compare(newPassword, user.passwordHash);
+    if (same) {
+      throw new BadRequestException('sameAsOld');
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+    await this.users.updatePasswordHash(record.userId, newHash);
+    await this.tokens.revokeAll(record.userId);
+
+    await this.prisma.passwordResetToken.update({
+      where: { id: record.id },
+      data: { usedAt: new Date() },
+    });
+  }
+
+  private hashResetToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private getResetTtlMs(): number {
+    const minutes = Number(this.cfg.get<string>('PASSWORD_RESET_TTL_MINUTES') ?? 60);
+    const safeMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 60;
+    return safeMinutes * 60 * 1000;
+  }
+
+  private sendPasswordResetEmail(email: string, token: string): void {
+    const appUrl = this.cfg.get<string>('APP_URL') ?? 'http://localhost:3000';
+    const resetLink = `${appUrl.replace(/\/$/, '')}/reset-password?token=${token}`;
+    // Simulate e-mail sending and expose token in logs for local testing
+    console.log(`[PasswordResetEmail] Sending reset link to ${email}: ${resetLink}`);
+    console.log(`[PasswordResetToken] token=${token}`);
   }
 }

@@ -74,6 +74,7 @@ model User {
   createdFeatureVs FeatureVersion[]   @relation("FeatureVersionCreatedBy")
   // Tokens de sesión
   UserRefreshToken UserRefreshToken[]
+  passwordResetTokens PasswordResetToken[]
   // 🔥 Proyectos que posee
   ownedProjects    Project[]          @relation("ProjectOwner")
   // 🔥 Membresías N:M por proyecto (permisos por proyecto)
@@ -90,6 +91,20 @@ model UserRefreshToken {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model GithubIdentity {
