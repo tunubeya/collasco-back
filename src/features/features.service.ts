@@ -146,7 +146,7 @@ export class FeaturesService {
         moduleId,
         name: dto.name,
         description: dto.description ?? null,
-        priority: dto.priority ?? FeaturePriority.MEDIUM,
+        priority: dto.priority,
         status: dto.status ?? FeatureStatus.PENDING,
         lastModifiedById: user.sub,
         sortOrder: nextOrder,

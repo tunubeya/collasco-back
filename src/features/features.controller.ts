@@ -32,6 +32,8 @@ export class FeaturesController {
     @Param('moduleId', new ParseUUIDPipe()) moduleId: string,
     @Body() dto: CreateFeatureDto,
   ) {
+    console.log(dto);
+    
     return this.service.createInModule(user, moduleId, dto);
   }
 
