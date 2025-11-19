@@ -344,8 +344,9 @@ export class ProjectsService {
   }
 
   async findOne(user: AccessTokenPayload, id: string) {
-    await this.ensureCanRead(user, id);
-    return this.prisma.project.findUnique({
+    const baseProject = await this.ensureCanRead(user, id);
+
+    const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
         owner: { select: { id: true, email: true, name: true } },
@@ -355,6 +356,19 @@ export class ProjectsService {
         githubCredential: true,
       },
     });
+
+    let membershipRole: ProjectMemberRole | null = null;
+    if (baseProject.ownerId === user.sub) {
+      membershipRole = ProjectMemberRole.OWNER;
+    } else {
+      const membership = await this.prisma.projectMember.findUnique({
+        where: { projectId_userId: { projectId: id, userId: user.sub } },
+        select: { role: true },
+      });
+      membershipRole = membership?.role ?? null;
+    }
+
+    return project ? { ...project, membershipRole } : null;
   }
 
   async getStructure(user: AccessTokenPayload, projectId: string) {
