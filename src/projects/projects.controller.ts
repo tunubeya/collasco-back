@@ -20,9 +20,12 @@ import type { AccessTokenPayload } from '../auth/types/jwt-payload';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { ListIssuesDto, ListPullsDto } from 'src/github/dto/list.dto';
 import { JwtAccessGuard } from 'src/auth/guards/jwt-access.guard';
+import { IsEnum } from 'class-validator';
+import { ProjectMemberRole } from '@prisma/client';
 
 class UpdateMemberRoleDto {
-  role!: import('@prisma/client').ProjectMemberRole;
+  @IsEnum(ProjectMemberRole)
+  role!: ProjectMemberRole
 }
 class UpsertProjectGithubCredentialDto {
   accessToken!: string; // ⚠️ en producción: cifra en reposo
