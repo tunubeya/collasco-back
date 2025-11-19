@@ -590,8 +590,7 @@ async getModuleStructure(user: AccessTokenPayload, moduleId: string) {
 
     if (!mod) throw new NotFoundException('Module not found');
 
-    // ⛳ auth: OWNER/MAINTAINER del proyecto (ajusta a tu esquema real)
-    // await this.assertCanMutateProject(user, mod.project.id, ['OWNER', 'MAINTAINER']);
+    await this.requireProjectRole(user.sub, mod.project.id, 'WRITE');
 
     if (!cascade && (mod._count.children > 0 || mod._count.features > 0)) {
       throw new ConflictException(

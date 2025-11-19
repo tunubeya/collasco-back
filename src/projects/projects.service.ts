@@ -225,6 +225,24 @@ export class ProjectsService {
     return p;
   }
 
+  private async ensureOwnerOrMaintainer(userId: string, projectId: string) {
+    const project = await this.getProjectOrThrow(projectId);
+    if (project.ownerId === userId) {
+      return { project, role: ProjectMemberRole.OWNER };
+    }
+
+    const membership = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId, userId } },
+      select: { role: true },
+    });
+
+    if (!membership || membership.role !== ProjectMemberRole.MAINTAINER) {
+      throw new ForbiddenException('Owner or maintainer only');
+    }
+
+    return { project, role: membership.role };
+  }
+
   /** === GitHub repo utils === */
   private parseProjectRepoOrThrow(projectRepositoryUrl?: string) {
     const parsed = parseRepoUrl(projectRepositoryUrl ?? '');
@@ -377,7 +395,7 @@ export class ProjectsService {
   }
 
   async update(user: AccessTokenPayload, id: string, dto: UpdateProjectDto) {
-    const project = await this.ensureOwner(user.sub, id);
+    const { project } = await this.ensureOwnerOrMaintainer(user.sub, id);
 
     if (dto.repositoryUrl !== undefined && dto.repositoryUrl !== null) {
       const parsed = parseRepoUrl(dto.repositoryUrl);
@@ -409,7 +427,7 @@ export class ProjectsService {
   }
 
   async remove(user: AccessTokenPayload, id: string) {
-    await this.ensureOwner(user.sub, id);
+    await this.ensureOwnerOrMaintainer(user.sub, id);
     await this.prisma.project.delete({ where: { id } });
     return { ok: true };
   }

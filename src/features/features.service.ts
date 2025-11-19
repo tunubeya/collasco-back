@@ -491,6 +491,8 @@ export class FeaturesService {
   async delete(user: AccessTokenPayload, featureId: string, opts: { force?: boolean } = {}) {
     const { force = false } = opts;
 
+    await this.requireFeature(user, featureId, 'WRITE');
+
     const feature = await this.prisma.feature.findUnique({
       where: { id: featureId },
       include: {
@@ -499,9 +501,6 @@ export class FeaturesService {
     });
 
     if (!feature) throw new NotFoundException('Feature not found');
-
-    // ⛳ auth: OWNER/MAINTAINER del proyecto (ajusta a tu esquema real)
-    // await this.assertCanMutateProject(user, feature.module.project.id, ['OWNER', 'MAINTAINER']);
 
     if (feature.publishedVersionId && !force) {
       throw new ConflictException('Feature is published. Use ?force=true to delete.');
