@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { FeaturePriority, FeatureStatus } from '@prisma/client';
 
 export class UpdateFeatureDto {
@@ -19,4 +19,8 @@ export class UpdateFeatureDto {
   @IsOptional()
   @IsEnum(FeatureStatus)
   status?: FeatureStatus;
+
+  @IsOptional()
+  @IsUUID()
+  moduleId?: string;
 }

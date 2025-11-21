@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -10,7 +11,7 @@ import type { CreateModuleDto } from './dto/create-module.dto';
 import type { UpdateModuleDto } from './dto/update-module.dto';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
-import { ProjectMemberRole } from '@prisma/client';
+import { Prisma, ProjectMemberRole } from '@prisma/client';
 
 type Allowed = 'READ' | 'WRITE';
 const READ_ROLES: ProjectMemberRole[] = ['OWNER', 'MAINTAINER', 'DEVELOPER', 'VIEWER'];
@@ -151,11 +152,56 @@ export class ModulesService {
   private async requireModule(user: AccessTokenPayload, moduleId: string, allowed: Allowed) {
     const mod = await this.prisma.module.findUnique({
       where: { id: moduleId },
-      select: { id: true, projectId: true },
+      select: { id: true, projectId: true, parentModuleId: true, sortOrder: true },
     });
     if (!mod) throw new NotFoundException('Module not found');
     await this.requireProjectRole(user.sub, mod.projectId, allowed);
     return mod;
+  }
+
+  private async nextModuleSortOrder(
+    projectId: string,
+    parentModuleId: string | null,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ) {
+    if (parentModuleId) {
+      const [moduleMax, featureMax] = await Promise.all([
+        client.module.aggregate({
+          _max: { sortOrder: true },
+          where: { parentModuleId },
+        }),
+        client.feature.aggregate({
+          _max: { sortOrder: true },
+          where: { moduleId: parentModuleId },
+        }),
+      ]);
+      return Math.max(moduleMax._max.sortOrder ?? -1, featureMax._max.sortOrder ?? -1) + 1;
+    }
+
+    const moduleMax = await client.module.aggregate({
+      _max: { sortOrder: true },
+      where: { projectId, parentModuleId: null },
+    });
+    return (moduleMax._max.sortOrder ?? -1) + 1;
+  }
+
+  private async compactOrdersAfterModuleMove(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    parentModuleId: string | null,
+    removedOrder: number | null,
+  ) {
+    if (removedOrder === null) return;
+    await tx.module.updateMany({
+      where: { projectId, parentModuleId, sortOrder: { gt: removedOrder } },
+      data: { sortOrder: { decrement: 1 } },
+    });
+    if (parentModuleId) {
+      await tx.feature.updateMany({
+        where: { moduleId: parentModuleId, sortOrder: { gt: removedOrder } },
+        data: { sortOrder: { decrement: 1 } },
+      });
+    }
   }
 
 async getModuleStructure(user: AccessTokenPayload, moduleId: string) {
@@ -303,31 +349,7 @@ async getModuleStructure(user: AccessTokenPayload, moduleId: string) {
       }
     }
 
-    let nextOrder: number;
-
-    if (dto.parentModuleId) {
-      const [moduleMax, featureMax] = await this.prisma.$transaction([
-        this.prisma.module.aggregate({
-          _max: { sortOrder: true },
-          where: { parentModuleId: dto.parentModuleId },
-        }),
-        this.prisma.feature.aggregate({
-          _max: { sortOrder: true },
-          where: { moduleId: dto.parentModuleId },
-        }),
-      ]);
-      const highest = Math.max(
-        moduleMax._max.sortOrder ?? -1,
-        featureMax._max.sortOrder ?? -1,
-      );
-      nextOrder = highest + 1;
-    } else {
-      const moduleMax = await this.prisma.module.aggregate({
-        _max: { sortOrder: true },
-        where: { projectId, parentModuleId: null },
-      });
-      nextOrder = (moduleMax._max.sortOrder ?? -1) + 1;
-    }
+    const nextOrder = await this.nextModuleSortOrder(projectId, dto.parentModuleId ?? null);
 
     return this.prisma.module.create({
       data: {
@@ -393,15 +415,79 @@ async getModuleStructure(user: AccessTokenPayload, moduleId: string) {
   }
 
   async update(user: AccessTokenPayload, moduleId: string, dto: UpdateModuleDto) {
-    await this.requireModule(user, moduleId, 'WRITE');
-    return this.prisma.module.update({
-      where: { id: moduleId },
-      data: {
-        name: dto.name ?? undefined,
-        description: dto.description ?? undefined,
-        isRoot: dto.isRoot ?? undefined,
-        lastModifiedById: user.sub,
-      },
+    const mod = await this.requireModule(user, moduleId, 'WRITE');
+
+    let parentUpdate: string | null | undefined;
+
+    const parentProvided = Object.hasOwn(dto, 'parentModuleId');
+    if (parentProvided) {
+      const targetParentId = dto.parentModuleId ?? null;
+
+      if (targetParentId === moduleId) {
+        throw new BadRequestException('Module cannot be its own parent');
+      }
+
+      if (targetParentId) {
+        const targetParent = await this.requireModule(user, targetParentId, 'WRITE');
+        if (targetParent.projectId !== mod.projectId) {
+          throw new ForbiddenException('Invalid parentModuleId');
+        }
+
+        const visited = new Set<string>();
+        let cursor = targetParent.parentModuleId;
+        while (cursor) {
+          if (cursor === moduleId) {
+            throw new ConflictException('Cannot move module inside its own subtree');
+          }
+          if (visited.has(cursor)) break;
+          visited.add(cursor);
+          const ancestor = await this.prisma.module.findUnique({
+            where: { id: cursor },
+            select: { parentModuleId: true },
+          });
+          cursor = ancestor?.parentModuleId ?? null;
+        }
+      }
+
+      if (targetParentId !== mod.parentModuleId) {
+        parentUpdate = targetParentId;
+      }
+    }
+
+    const baseData = {
+      name: dto.name ?? undefined,
+      description: dto.description ?? undefined,
+      isRoot: dto.isRoot ?? undefined,
+      lastModifiedById: user.sub,
+    };
+
+    if (parentUpdate === undefined) {
+      return this.prisma.module.update({
+        where: { id: moduleId },
+        data: baseData,
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.compactOrdersAfterModuleMove(
+        tx,
+        mod.projectId,
+        mod.parentModuleId ?? null,
+        mod.sortOrder ?? null,
+      );
+      const nextOrder = await this.nextModuleSortOrder(
+        mod.projectId,
+        parentUpdate ?? null,
+        tx,
+      );
+      return tx.module.update({
+        where: { id: moduleId },
+        data: {
+          ...baseData,
+          parentModuleId: parentUpdate ?? null,
+          sortOrder: nextOrder,
+        },
+      });
     });
   }
 

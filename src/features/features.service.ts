@@ -14,7 +14,7 @@ import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
 import { CommitSummary, GithubService } from 'src/github/github.service';
 import { SyncCommitsDto } from './dto/sync-commits.dto';
-import { FeaturePriority, FeatureStatus, ProjectMemberRole, ReviewStatus } from '@prisma/client';
+import { FeatureStatus, Prisma, ProjectMemberRole, ReviewStatus } from '@prisma/client';
 import { createHash } from 'crypto';
 
 type Allowed = 'READ' | 'WRITE';
@@ -115,7 +115,12 @@ export class FeaturesService {
   private async requireFeature(user: AccessTokenPayload, featureId: string, allowed: Allowed) {
     const feature = await this.prisma.feature.findUnique({
       where: { id: featureId },
-      select: { id: true, moduleId: true },
+      select: {
+        id: true,
+        moduleId: true,
+        sortOrder: true,
+        module: { select: { projectId: true } },
+      },
     });
     if (!feature) throw new NotFoundException('Feature not found');
     // valida permisos por proyecto a partir del módulo
@@ -123,23 +128,47 @@ export class FeaturesService {
     return feature;
   }
 
-  // ===== CRUD en módulo =====
-  async createInModule(user: AccessTokenPayload, moduleId: string, dto: CreateFeatureDto) {
-    await this.requireModule(user, moduleId, 'WRITE');
-
-    const [moduleMax, featureMax] = await this.prisma.$transaction([
-      this.prisma.module.aggregate({
+  private async nextSortOrderInModule(
+    moduleId: string,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ) {
+    const [moduleMax, featureMax] = await Promise.all([
+      client.module.aggregate({
         _max: { sortOrder: true },
         where: { parentModuleId: moduleId },
       }),
-      this.prisma.feature.aggregate({
+      client.feature.aggregate({
         _max: { sortOrder: true },
         where: { moduleId },
       }),
     ]);
 
-    const nextOrder =
-      Math.max(moduleMax._max.sortOrder ?? -1, featureMax._max.sortOrder ?? -1) + 1;
+    return Math.max(moduleMax._max.sortOrder ?? -1, featureMax._max.sortOrder ?? -1) + 1;
+  }
+
+  private async compactOrdersAfterFeatureMove(
+    tx: Prisma.TransactionClient,
+    moduleId: string,
+    removedOrder: number | null,
+  ) {
+    if (removedOrder === null) return;
+    await Promise.all([
+      tx.module.updateMany({
+        where: { parentModuleId: moduleId, sortOrder: { gt: removedOrder } },
+        data: { sortOrder: { decrement: 1 } },
+      }),
+      tx.feature.updateMany({
+        where: { moduleId, sortOrder: { gt: removedOrder } },
+        data: { sortOrder: { decrement: 1 } },
+      }),
+    ]);
+  }
+
+  // ===== CRUD en módulo =====
+  async createInModule(user: AccessTokenPayload, moduleId: string, dto: CreateFeatureDto) {
+    await this.requireModule(user, moduleId, 'WRITE');
+
+    const nextOrder = await this.nextSortOrderInModule(moduleId);
 
     return this.prisma.feature.create({
       data: {
@@ -200,16 +229,45 @@ export class FeaturesService {
   }
 
   async update(user: AccessTokenPayload, featureId: string, dto: UpdateFeatureDto) {
-    await this.requireFeature(user, featureId, 'WRITE');
-    return this.prisma.feature.update({
-      where: { id: featureId },
-      data: {
-        name: dto.name ?? undefined,
-        description: dto.description ?? undefined,
-        priority: dto.priority ?? undefined,
-        status: dto.status ?? undefined,
-        lastModifiedById: user.sub,
-      },
+    const feature = await this.requireFeature(user, featureId, 'WRITE');
+
+    let moduleUpdate: string | undefined;
+
+    if (dto.moduleId && dto.moduleId !== feature.moduleId) {
+      const targetModule = await this.requireModule(user, dto.moduleId, 'WRITE');
+      const currentProjectId = feature.module.projectId;
+      if (targetModule.projectId !== currentProjectId) {
+        throw new BadRequestException('Feature cannot be moved to another project');
+      }
+      moduleUpdate = dto.moduleId;
+    }
+
+    const baseData = {
+      name: dto.name ?? undefined,
+      description: dto.description ?? undefined,
+      priority: dto.priority ?? undefined,
+      status: dto.status ?? undefined,
+      lastModifiedById: user.sub,
+    };
+
+    if (!moduleUpdate) {
+      return this.prisma.feature.update({
+        where: { id: featureId },
+        data: baseData,
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.compactOrdersAfterFeatureMove(tx, feature.moduleId, feature.sortOrder ?? null);
+      const nextOrder = await this.nextSortOrderInModule(moduleUpdate, tx);
+      return tx.feature.update({
+        where: { id: featureId },
+        data: {
+          ...baseData,
+          moduleId: moduleUpdate,
+          sortOrder: nextOrder,
+        },
+      });
     });
   }
 

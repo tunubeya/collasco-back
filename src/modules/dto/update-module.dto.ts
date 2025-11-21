@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength, IsBoolean } from 'class-validator';
+import { IsOptional, IsString, MaxLength, IsBoolean, IsUUID } from 'class-validator';
 
 export class UpdateModuleDto {
   @IsOptional()
@@ -14,4 +14,8 @@ export class UpdateModuleDto {
   @IsOptional()
   @IsBoolean()
   isRoot?: boolean;
+
+  @IsOptional()
+  @IsUUID()
+  parentModuleId?: string | null;
 }
