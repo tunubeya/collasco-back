@@ -12,6 +12,7 @@ import type { UpdateModuleDto } from './dto/update-module.dto';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
 import { Prisma, ProjectMemberRole } from '@prisma/client';
+import { MoveDirection } from 'src/common/dto/move-order.dto';
 
 type Allowed = 'READ' | 'WRITE';
 const READ_ROLES: ProjectMemberRole[] = ['OWNER', 'MAINTAINER', 'DEVELOPER', 'VIEWER'];
@@ -122,6 +123,12 @@ type FeatureRow = {
   createdAt: Date;
   publishedVersionId: string | null;
 };
+
+type OrderNeighbor = {
+  type: 'module' | 'feature';
+  id: string;
+  sortOrder: number | null;
+};
 @Injectable()
 export class ModulesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -204,7 +211,82 @@ export class ModulesService {
     }
   }
 
-async getModuleStructure(user: AccessTokenPayload, moduleId: string) {
+  private pickNeighbor(
+    direction: MoveDirection,
+    candidates: OrderNeighbor[],
+  ): OrderNeighbor | null {
+    if (!candidates.length) return null;
+    return candidates.reduce<OrderNeighbor | null>((best, candidate) => {
+      if (!best) return candidate;
+      const bestValue =
+        best.sortOrder ??
+        (direction === MoveDirection.UP ? Number.MIN_SAFE_INTEGER : Number.MAX_SAFE_INTEGER);
+      const candidateValue =
+        candidate.sortOrder ??
+        (direction === MoveDirection.UP ? Number.MIN_SAFE_INTEGER : Number.MAX_SAFE_INTEGER);
+      if (direction === MoveDirection.UP) {
+        return candidateValue > bestValue ? candidate : best;
+      }
+      return candidateValue < bestValue ? candidate : best;
+    }, null);
+  }
+
+  private async findNeighborForModule(
+    moduleId: string,
+    projectId: string,
+    parentModuleId: string | null,
+    currentOrder: number,
+    direction: MoveDirection,
+  ): Promise<OrderNeighbor | null> {
+    const orderFilter =
+      direction === MoveDirection.UP ? { lt: currentOrder } : { gt: currentOrder };
+    const orderBy = { sortOrder: direction === MoveDirection.UP ? 'desc' : 'asc' } as const;
+
+    const moduleWhere = {
+      projectId,
+      parentModuleId,
+      id: { not: moduleId },
+      sortOrder: orderFilter,
+    };
+
+    const moduleNeighborPromise = this.prisma.module.findFirst({
+      where: moduleWhere,
+      orderBy,
+      select: { id: true, sortOrder: true },
+    });
+
+    const featureNeighborPromise = parentModuleId
+      ? this.prisma.feature.findFirst({
+          where: { moduleId: parentModuleId, sortOrder: orderFilter },
+          orderBy,
+          select: { id: true, sortOrder: true },
+        })
+      : Promise.resolve(null);
+
+    const [moduleNeighbor, featureNeighbor] = await Promise.all([
+      moduleNeighborPromise,
+      featureNeighborPromise,
+    ]);
+
+    const candidates: OrderNeighbor[] = [];
+    if (moduleNeighbor) {
+      candidates.push({
+        type: 'module',
+        id: moduleNeighbor.id,
+        sortOrder: moduleNeighbor.sortOrder,
+      });
+    }
+    if (featureNeighbor) {
+      candidates.push({
+        type: 'feature',
+        id: featureNeighbor.id,
+        sortOrder: featureNeighbor.sortOrder,
+      });
+    }
+    return this.pickNeighbor(direction, candidates);
+  }
+
+  async getModuleStructure(user: AccessTokenPayload, moduleId: string) {
     const mod = await this.requireModule(user, moduleId, 'READ'); // ya valida rol y devuelve { id, projectId }
 
     // Traemos TODO el universo del proyecto (módulos + features) para poder construir el subárbol
@@ -489,6 +571,47 @@ async getModuleStructure(user: AccessTokenPayload, moduleId: string) {
         },
       });
     });
+  }
+
+  async moveOrder(user: AccessTokenPayload, moduleId: string, direction: MoveDirection) {
+    const mod = await this.requireModule(user, moduleId, 'WRITE');
+    const currentOrder = mod.sortOrder ?? 0;
+    const neighbor = await this.findNeighborForModule(
+      moduleId,
+      mod.projectId,
+      mod.parentModuleId ?? null,
+      currentOrder,
+      direction,
+    );
+
+    if (!neighbor) {
+      throw new BadRequestException('No hay elementos para intercambiar en esa dirección');
+    }
+
+    const neighborOrder =
+      neighbor.sortOrder ??
+      (direction === MoveDirection.UP ? currentOrder - 1 : currentOrder + 1);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.module.update({
+        where: { id: moduleId },
+        data: { sortOrder: neighborOrder, lastModifiedById: user.sub },
+      });
+
+      if (neighbor.type === 'module') {
+        await tx.module.update({
+          where: { id: neighbor.id },
+          data: { sortOrder: currentOrder, lastModifiedById: user.sub },
+        });
+      } else {
+        await tx.feature.update({
+          where: { id: neighbor.id },
+          data: { sortOrder: currentOrder, lastModifiedById: user.sub },
+        });
+      }
+    });
+
+    return { ok: true, moduleId, sortOrder: neighborOrder };
   }
 
   // ===== Versionado =====

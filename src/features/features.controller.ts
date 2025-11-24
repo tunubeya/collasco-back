@@ -20,6 +20,7 @@ import type { AccessTokenPayload } from '../auth/types/jwt-payload';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { Throttle, minutes } from '@nestjs/throttler';
 import { SyncCommitsDto } from './dto/sync-commits.dto';
+import { MoveOrderDto } from 'src/common/dto/move-order.dto';
 
 @Controller()
 export class FeaturesController {
@@ -64,6 +65,15 @@ export class FeaturesController {
     @Body() dto: UpdateFeatureDto,
   ) {
     return this.service.update(user, featureId, dto);
+  }
+
+  @Patch('features/:featureId/order')
+  async moveOrder(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('featureId', new ParseUUIDPipe()) featureId: string,
+    @Body() dto: MoveOrderDto,
+  ) {
+    return this.service.moveOrder(user, featureId, dto.direction);
   }
 
   @Delete('features/:featureId')

@@ -20,6 +20,7 @@ import type { AccessTokenPayload } from '../auth/types/jwt-payload';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { JwtAccessGuard } from 'src/auth/guards/jwt-access.guard';
 import { IsInt, Min } from 'class-validator';
+import { MoveOrderDto } from 'src/common/dto/move-order.dto';
 
 class PublishModuleDto {
   @IsInt()
@@ -76,6 +77,15 @@ export class ModulesController {
     @Body() dto: UpdateModuleDto,
   ) {
     return this.service.update(user, moduleId, dto);
+  }
+
+  @Patch('modules/:moduleId/order')
+  async moveOrder(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('moduleId', new ParseUUIDPipe()) moduleId: string,
+    @Body() dto: MoveOrderDto,
+  ) {
+    return this.service.moveOrder(user, moduleId, dto.direction);
   }
 
   @Delete('modules/:moduleId')

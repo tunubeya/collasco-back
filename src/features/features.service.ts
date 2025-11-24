@@ -16,10 +16,17 @@ import { CommitSummary, GithubService } from 'src/github/github.service';
 import { SyncCommitsDto } from './dto/sync-commits.dto';
 import { FeatureStatus, Prisma, ProjectMemberRole, ReviewStatus } from '@prisma/client';
 import { createHash } from 'crypto';
+import { MoveDirection } from 'src/common/dto/move-order.dto';
 
 type Allowed = 'READ' | 'WRITE';
 const READ_ROLES: ProjectMemberRole[] = ['OWNER', 'MAINTAINER', 'DEVELOPER', 'VIEWER'];
 const WRITE_ROLES: ProjectMemberRole[] = ['OWNER', 'MAINTAINER'];
+
+type NeighborCandidate = {
+  type: 'module' | 'feature';
+  id: string;
+  sortOrder: number | null;
+};
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -164,6 +171,66 @@ export class FeaturesService {
     ]);
   }
 
+  private pickNeighbor(
+    direction: MoveDirection,
+    candidates: NeighborCandidate[],
+  ): NeighborCandidate | null {
+    if (!candidates.length) return null;
+    return candidates.reduce<NeighborCandidate | null>((best, candidate) => {
+      if (!best) return candidate;
+      const bestValue =
+        best.sortOrder ??
+        (direction === MoveDirection.UP ? Number.MIN_SAFE_INTEGER : Number.MAX_SAFE_INTEGER);
+      const candidateValue =
+        candidate.sortOrder ??
+        (direction === MoveDirection.UP ? Number.MIN_SAFE_INTEGER : Number.MAX_SAFE_INTEGER);
+      if (direction === MoveDirection.UP) {
+        return candidateValue > bestValue ? candidate : best;
+      }
+      return candidateValue < bestValue ? candidate : best;
+    }, null);
+  }
+
+  private async findNeighborInModule(
+    moduleId: string,
+    currentOrder: number,
+    direction: MoveDirection,
+  ): Promise<NeighborCandidate | null> {
+    const orderFilter =
+      direction === MoveDirection.UP ? { lt: currentOrder } : { gt: currentOrder };
+    const orderBy = { sortOrder: direction === MoveDirection.UP ? 'desc' : 'asc' } as const;
+
+    const [moduleNeighbor, featureNeighbor] = await Promise.all([
+      this.prisma.module.findFirst({
+        where: { parentModuleId: moduleId, sortOrder: orderFilter },
+        orderBy,
+        select: { id: true, sortOrder: true },
+      }),
+      this.prisma.feature.findFirst({
+        where: { moduleId, sortOrder: orderFilter },
+        orderBy,
+        select: { id: true, sortOrder: true },
+      }),
+    ]);
+
+    const candidates: NeighborCandidate[] = [];
+    if (moduleNeighbor) {
+      candidates.push({
+        type: 'module',
+        id: moduleNeighbor.id,
+        sortOrder: moduleNeighbor.sortOrder,
+      });
+    }
+    if (featureNeighbor) {
+      candidates.push({
+        type: 'feature',
+        id: featureNeighbor.id,
+        sortOrder: featureNeighbor.sortOrder,
+      });
+    }
+    return this.pickNeighbor(direction, candidates);
+  }
+
   // ===== CRUD en módulo =====
   async createInModule(user: AccessTokenPayload, moduleId: string, dto: CreateFeatureDto) {
     await this.requireModule(user, moduleId, 'WRITE');
@@ -269,6 +336,40 @@ export class FeaturesService {
         },
       });
     });
+  }
+
+  async moveOrder(user: AccessTokenPayload, featureId: string, direction: MoveDirection) {
+    const feature = await this.requireFeature(user, featureId, 'WRITE');
+    const currentOrder = feature.sortOrder ?? 0;
+    const neighbor = await this.findNeighborInModule(feature.moduleId, currentOrder, direction);
+    if (!neighbor) {
+      throw new BadRequestException('No hay elementos para intercambiar en esa dirección');
+    }
+
+    const neighborOrder =
+      neighbor.sortOrder ??
+      (direction === MoveDirection.UP ? currentOrder - 1 : currentOrder + 1);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.feature.update({
+        where: { id: featureId },
+        data: { sortOrder: neighborOrder, lastModifiedById: user.sub },
+      });
+
+      if (neighbor.type === 'feature') {
+        await tx.feature.update({
+          where: { id: neighbor.id },
+          data: { sortOrder: currentOrder, lastModifiedById: user.sub },
+        });
+      } else {
+        await tx.module.update({
+          where: { id: neighbor.id },
+          data: { sortOrder: currentOrder, lastModifiedById: user.sub },
+        });
+      }
+    });
+
+    return { ok: true, featureId, sortOrder: neighborOrder };
   }
 
   // ===== Versionado (dedupe por contentHash) =====
