@@ -21,6 +21,7 @@ type ModuleRow = {
   projectId: string;
   parentModuleId: string | null;
   name: string;
+  description: string | null;
   isRoot: boolean;
   sortOrder: number;
   createdAt: Date;
@@ -31,6 +32,7 @@ type FeatureRow = {
   id: string;
   moduleId: string;
   name: string;
+  description: string | null;
   status: import('@prisma/client').FeatureStatus;
   priority: import('@prisma/client').FeaturePriority | null;
   sortOrder: number;
@@ -43,6 +45,7 @@ type TreeFeatureNode = {
   id: string;
   moduleId: string;
   name: string;
+  description: string | null;
   status: import('@prisma/client').FeatureStatus;
   priority: import('@prisma/client').FeaturePriority | null;
   sortOrder: number | null;
@@ -55,6 +58,7 @@ export type TreeModuleNode = {
   type: 'module';
   id: string;
   name: string;
+  description: string | null;
   parentModuleId: string | null;
   isRoot: boolean;
   sortOrder: number | null;
@@ -140,6 +144,7 @@ export class ProjectsService {
           id: feat.id,
           moduleId: feat.moduleId,
           name: feat.name,
+          description: feat.description,
           status: feat.status,
           priority: feat.priority,
           sortOrder: feat.sortOrder ?? null,
@@ -153,6 +158,7 @@ export class ProjectsService {
         type: 'module',
         id: mod.id,
         name: mod.name,
+        description: mod.description,
         parentModuleId: mod.parentModuleId,
         isRoot: mod.isRoot,
         sortOrder: mod.sortOrder ?? null,
@@ -312,6 +318,7 @@ export class ProjectsService {
           id: true,
           projectId: true,
           name: true,
+          description: true,
           parentModuleId: true,
           isRoot: true,
           sortOrder: true,
@@ -325,6 +332,7 @@ export class ProjectsService {
           id: true,
           moduleId: true,
           name: true,
+          description: true,
           status: true,
           priority: true,
           sortOrder: true,
@@ -372,7 +380,7 @@ export class ProjectsService {
   }
 
   async getStructure(user: AccessTokenPayload, projectId: string) {
-    await this.ensureCanRead(user, projectId);
+    const project = await this.ensureCanRead(user, projectId);
 
     const [modules, features] = await this.prisma.$transaction([
       this.prisma.module.findMany({
@@ -381,6 +389,7 @@ export class ProjectsService {
           id: true,
           projectId: true,
           name: true,
+          description: true,
           parentModuleId: true,
           isRoot: true,
           sortOrder: true,
@@ -394,6 +403,7 @@ export class ProjectsService {
           id: true,
           moduleId: true,
           name: true,
+          description: true,
           status: true,
           priority: true,
           sortOrder: true,
@@ -405,7 +415,7 @@ export class ProjectsService {
 
     const modulesTree = this.buildModuleTree(modules, features);
 
-    return { projectId, modules: modulesTree };
+    return { projectId, description: project.description, modules: modulesTree };
   }
 
   async update(user: AccessTokenPayload, id: string, dto: UpdateProjectDto) {
