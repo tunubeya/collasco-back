@@ -1,5 +1,16 @@
-import { ArrayMinSize, ArrayUnique, IsArray, IsOptional, IsString, IsUUID, MinLength, ValidateNested } from 'class-validator';
+import {
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
+import { TestRunStatus } from '@prisma/client';
 import { TestResultInput } from './create-test-run.dto';
 
 export class CreateProjectTestRunDto {
@@ -30,4 +41,8 @@ export class CreateProjectTestRunDto {
   @ArrayUnique()
   @IsUUID('4', { each: true })
   targetTestCaseIds?: string[];
+
+  @IsOptional()
+  @IsEnum(TestRunStatus)
+  status?: TestRunStatus;
 }

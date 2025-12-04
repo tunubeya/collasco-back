@@ -1,4 +1,4 @@
-import { TestEvaluation } from '@prisma/client';
+import { TestEvaluation, TestRunStatus } from '@prisma/client';
 import {
   ArrayMinSize,
   ArrayUnique,
@@ -53,4 +53,8 @@ export class CreateTestRunDto {
   @ArrayUnique()
   @IsUUID('4', { each: true })
   targetTestCaseIds?: string[];
+
+  @IsOptional()
+  @IsEnum(TestRunStatus)
+  status?: TestRunStatus;
 }

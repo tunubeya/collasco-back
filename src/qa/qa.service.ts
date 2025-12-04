@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, TestEvaluation } from '@prisma/client';
+import { Prisma, TestEvaluation, TestRunStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateTestCasesDto } from './dto/create-test-cases.dto';
 import { UpdateTestCaseDto } from './dto/update-test-case.dto';
@@ -175,6 +175,7 @@ export class QaService {
         notes: dto.notes,
         targetCaseIds: targetScope.targetCaseIds,
         isTargetScopeCustom: targetScope.isCustom,
+        status: dto.status ?? TestRunStatus.OPEN,
       },
     });
 
@@ -223,6 +224,7 @@ export class QaService {
         notes: dto.notes,
         targetCaseIds: targetScope.targetCaseIds,
         isTargetScopeCustom: targetScope.isCustom,
+        status: dto.status ?? TestRunStatus.OPEN,
       },
     });
 
@@ -259,6 +261,9 @@ export class QaService {
     }
     if (dto.notes !== undefined) {
       runUpdateData.notes = dto.notes;
+    }
+    if (dto.status !== undefined) {
+      runUpdateData.status = dto.status;
     }
 
     const addOrUpdateResults = dto.results ?? [];
@@ -479,6 +484,7 @@ export class QaService {
       name: run.name,
       environment: run.environment,
       by: run.runBy?.name ?? null,
+      status: run.status,
       summary: this.buildSummary(run.results.map((r) => r.evaluation)),
     }));
   }
@@ -516,6 +522,7 @@ export class QaService {
       environment: run.environment,
       by: run.runBy?.name ?? null,
       feature: run.feature ? { id: run.feature.id, name: run.feature.name } : null,
+      status: run.status,
       summary: this.buildSummary(run.results.map((r) => r.evaluation)),
     }));
   }

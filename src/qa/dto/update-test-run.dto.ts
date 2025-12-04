@@ -1,5 +1,16 @@
 import { Type } from 'class-transformer';
-import { ArrayMinSize, ArrayUnique, IsArray, IsOptional, IsString, IsUUID, MinLength, ValidateNested } from 'class-validator';
+import {
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
+import { TestRunStatus } from '@prisma/client';
 import { TestResultInput } from './create-test-run.dto';
 
 export class UpdateTestRunDto {
@@ -35,4 +46,8 @@ export class UpdateTestRunDto {
   @ArrayUnique()
   @IsUUID('4', { each: true })
   addTestCaseIds?: string[];
+
+  @IsOptional()
+  @IsEnum(TestRunStatus)
+  status?: TestRunStatus;
 }

@@ -55,6 +55,11 @@ enum TestEvaluation {
   PASSED
 }
 
+enum TestRunStatus {
+  OPEN
+  CLOSED
+}
+
 model User {
   id               String             @id @default(uuid())
   email            String             @unique
@@ -332,6 +337,7 @@ model TestRun {
   targetCaseIds String[] @default([])
   isTargetScopeCustom Boolean @default(false)
   createdAt DateTime @default(now())
+  status    TestRunStatus @default(OPEN)
 
   project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   feature Feature?    @relation(fields: [featureId], references: [id], onDelete: Cascade)
