@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, TestEvaluation, TestRunStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateTestCasesDto } from './dto/create-test-cases.dto';
@@ -73,6 +73,7 @@ type TestRunDetail = TestRunRecord & { coverage: RunCoverage };
 
 @Injectable()
 export class QaService {
+  private readonly logger = new Logger(QaService.name);
   private static readonly EVALUATIONS: TestEvaluation[] = [
     TestEvaluation.NOT_WORKING,
     TestEvaluation.MINOR_ISSUE,
@@ -163,7 +164,16 @@ export class QaService {
       featureId,
       results.map((r) => r.testCaseId),
     );
+    const requestedTargets = dto.targetTestCaseIds?.length ?? 0;
+    this.logger.log(
+      `createTestRun: received ${requestedTargets} explicit targetCaseIds for feature ${featureId}`,
+    );
     const targetScope = await this.resolveTargetScope(projectId, featureId, dto.targetTestCaseIds);
+    this.logger.log(
+      `createTestRun: persisting ${
+        targetScope.targetCaseIds.length
+      } targetCaseIds (custom=${targetScope.isCustom}) for feature ${featureId}`,
+    );
 
     const run = await this.prisma.testRun.create({
       data: {
@@ -212,7 +222,16 @@ export class QaService {
       results.map((r) => r.testCaseId),
     );
 
+    const requestedTargets = dto.targetTestCaseIds?.length ?? 0;
+    this.logger.log(
+      `createProjectTestRun: received ${requestedTargets} explicit targetCaseIds for project ${projectId}`,
+    );
     const targetScope = await this.resolveTargetScope(projectId, null, dto.targetTestCaseIds);
+    this.logger.log(
+      `createProjectTestRun: persisting ${
+        targetScope.targetCaseIds.length
+      } targetCaseIds (custom=${targetScope.isCustom}) for project ${projectId}`,
+    );
 
     const run = await this.prisma.testRun.create({
       data: {
@@ -274,7 +293,8 @@ export class QaService {
       Object.keys(runUpdateData).length > 0 ||
       addOrUpdateResults.length > 0 ||
       removals.length > 0 ||
-      additions.length > 0;
+      additions.length > 0 ||
+      dto.targetTestCaseIds !== undefined;
 
     if (!hasPayloadChanges) {
       throw new BadRequestException('Nothing to update.');
@@ -284,6 +304,23 @@ export class QaService {
     let hasCustomTargets = hadCustomTargets;
     const currentTargets = this.buildTargetCaseSet(run.targetCaseIds);
     let targetsChanged = false;
+
+    if (dto.targetTestCaseIds !== undefined) {
+      const targetScopeOverride = await this.resolveTargetScope(
+        run.projectId,
+        run.featureId,
+        dto.targetTestCaseIds,
+      );
+      currentTargets.clear();
+      for (const id of targetScopeOverride.targetCaseIds) {
+        currentTargets.add(id);
+      }
+      hasCustomTargets = targetScopeOverride.isCustom;
+      targetsChanged = true;
+      this.logger.log(
+        `updateTestRun: run ${runId} explicit target scope set to ${currentTargets.size} cases (custom=${hasCustomTargets})`,
+      );
+    }
 
     if (additions.length > 0) {
       await this.assertCasesBelongToScope(run.projectId, run.featureId, additions);

@@ -48,6 +48,12 @@ export class UpdateTestRunDto {
   addTestCaseIds?: string[];
 
   @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  targetTestCaseIds?: string[];
+
+  @IsOptional()
   @IsEnum(TestRunStatus)
   status?: TestRunStatus;
 }
