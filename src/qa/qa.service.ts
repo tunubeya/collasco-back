@@ -594,15 +594,14 @@ export class QaService {
       : [];
 
     const latestRunDetails = await Promise.all(
-      latestRuns.map(async (run) => ({
-        run,
-        coverage: await this.buildCoverage(run),
-        passRate:
-          run.results.length > 0
-            ? run.results.filter((result) => result.evaluation === TestEvaluation.PASSED).length /
-              run.results.length
-            : null,
-      })),
+      latestRuns.map(async (run) => {
+        const coverage = await this.buildCoverage(run);
+        return {
+          run,
+          coverage,
+          passRate: this.calculatePassRate(run, coverage),
+        };
+      }),
     );
 
     const featureRunInfo = new Map<
@@ -716,7 +715,7 @@ export class QaService {
     const latestRun = await this.prisma.testRun.findFirst({
       where: { featureId },
       orderBy: { runDate: 'desc' },
-      include: { results: { select: { evaluation: true } } },
+      include: testRunDetailInclude,
     });
 
     if (!latestRun) {
@@ -727,11 +726,8 @@ export class QaService {
       };
     }
 
-    const total = latestRun.results.length;
-    const passed = latestRun.results.filter(
-      (result) => result.evaluation === TestEvaluation.PASSED,
-    ).length;
-    const passRate = total > 0 ? passed / total : null;
+    const coverage = await this.buildCoverage(latestRun);
+    const passRate = this.calculatePassRate(latestRun, coverage);
 
     return {
       featureId,
@@ -885,43 +881,49 @@ export class QaService {
     };
   }
 
+  private calculatePassRate(run: TestRunRecord, coverage: RunCoverage): number | null {
+    const passed = run.results.filter((result) => result.evaluation === TestEvaluation.PASSED).length;
+    const denominator = coverage.totalCases > 0 ? coverage.totalCases : run.results.length;
+    if (denominator === 0) {
+      return null;
+    }
+    return passed / denominator;
+  }
+
   private async buildCoverage(run: TestRunRecord): Promise<RunCoverage> {
     const executedIds = new Set(run.results.map((result) => result.testCaseId));
     if (run.isTargetScopeCustom) {
-      if (run.targetCaseIds.length === 0) {
-        return {
-          scope: run.featureId ? 'FEATURE' : 'PROJECT',
-          totalCases: 0,
-          executedCases: 0,
-          missingCases: 0,
-          missingTestCases: [],
-        };
-      }
-      const targetCases = await this.prisma.testCase.findMany({
-        where: { id: { in: run.targetCaseIds } },
-        select: {
-          id: true,
-          name: true,
-          featureId: true,
-          feature: { select: { id: true, name: true } },
-        },
-      });
+      const scope = run.featureId ? 'FEATURE' : 'PROJECT';
+      const targetCases = run.targetCaseIds.length
+        ? await this.prisma.testCase.findMany({
+            where: { id: { in: run.targetCaseIds } },
+            select: {
+              id: true,
+              name: true,
+              featureId: true,
+              feature: { select: { id: true, name: true } },
+            },
+          })
+        : [];
+      const scopeCases = await this.listScopeCasesForRun(run);
       const orderMap = new Map(targetCases.map((testCase) => [testCase.id, testCase]));
-      const orderedCases = run.targetCaseIds
+      const orderedTargetCases = run.targetCaseIds
         .map((id) => orderMap.get(id))
         .filter((testCase): testCase is (typeof targetCases)[number] => Boolean(testCase));
-      const missingPlannedCases = orderedCases.filter((testCase) => !executedIds.has(testCase.id));
-      const executedPlannedCases = orderedCases.length - missingPlannedCases.length;
+      const targetSet = new Set(run.targetCaseIds);
+      const additionalCases = scopeCases.filter((testCase) => !targetSet.has(testCase.id));
+      const orderedCases = [...orderedTargetCases, ...additionalCases];
+      const missingCases = orderedCases.filter((testCase) => !executedIds.has(testCase.id));
       return {
-        scope: run.featureId ? 'FEATURE' : 'PROJECT',
+        scope,
         totalCases: orderedCases.length,
-        executedCases: executedPlannedCases,
-        missingCases: missingPlannedCases.length,
-        missingTestCases: missingPlannedCases.map((testCase) => ({
+        executedCases: orderedCases.length - missingCases.length,
+        missingCases: missingCases.length,
+        missingTestCases: missingCases.map((testCase) => ({
           id: testCase.id,
           name: testCase.name,
           featureId: testCase.featureId,
-          featureName: testCase.feature?.name ?? 'Unknown feature',
+          featureName: testCase.feature?.name ?? run.feature?.name ?? 'Unknown feature',
         })),
       };
     }
@@ -987,5 +989,52 @@ export class QaService {
         featureName: testCase.feature?.name ?? 'Unknown feature',
       })),
     };
+  }
+
+  private async listScopeCasesForRun(
+    run: TestRunRecord,
+  ): Promise<
+    Array<{
+      id: string;
+      name: string;
+      featureId: string;
+      feature: { id: string; name: string } | null;
+    }>
+  > {
+    if (run.featureId) {
+      return this.prisma.testCase.findMany({
+        where: { featureId: run.featureId, isArchived: false },
+        select: {
+          id: true,
+          name: true,
+          featureId: true,
+          feature: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
+
+    return this.prisma.testCase.findMany({
+      where: {
+        feature: {
+          module: {
+            projectId: run.project.id,
+          },
+        },
+        isArchived: false,
+      },
+      select: {
+        id: true,
+        name: true,
+        featureId: true,
+        feature: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 }
