@@ -138,6 +138,15 @@ export class QaController {
     );
   }
 
+  @Get('projects/:projectId/dashboard')
+  async getProjectDashboard(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.getProjectDashboard(userId, projectId);
+  }
+
   @Get('features/:featureId/test-health')
   async getTestHealth(
     @CurrentUser() user: AccessTokenPayload | undefined,

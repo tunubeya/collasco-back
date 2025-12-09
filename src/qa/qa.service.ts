@@ -243,7 +243,7 @@ export class QaService {
         notes: dto.notes,
         targetCaseIds: targetScope.targetCaseIds,
         isTargetScopeCustom: targetScope.isCustom,
-        status: dto.status ?? TestRunStatus.OPEN,
+        status: dto.status ?? TestRunStatus.OPEN
       },
     });
 
@@ -523,6 +523,7 @@ export class QaService {
       by: run.runBy?.name ?? null,
       status: run.status,
       summary: this.buildSummary(run.results.map((r) => r.evaluation)),
+      totalTestCases : run.targetCaseIds.length > 0 ? run.targetCaseIds.length : 0,
     }));
   }
 
@@ -562,6 +563,150 @@ export class QaService {
       status: run.status,
       summary: this.buildSummary(run.results.map((r) => r.evaluation)),
     }));
+  }
+
+  async getProjectDashboard(userId: string, projectId: string) {
+    await assertProjectRead(this.prisma, userId, projectId);
+
+    const features = await this.prisma.feature.findMany({
+      where: { module: { projectId } },
+      select: { id: true, name: true, description: true },
+      orderBy: { name: 'asc' },
+    });
+    const totalFeatures = features.length;
+    const featuresMissingDescription = features
+      .filter((feature) => !feature.description || feature.description.trim().length === 0)
+      .map((feature) => ({ id: feature.id, name: feature.name }));
+
+    const latestRunPairs = await this.prisma.$queryRaw<
+      { featureId: string; id: string }[]
+    >`SELECT DISTINCT ON ("featureId") "id", "featureId"
+      FROM "TestRun"
+      WHERE "projectId" = ${projectId} AND "featureId" IS NOT NULL
+      ORDER BY "featureId", "runDate" DESC`;
+    const latestRunIds = latestRunPairs.map((pair) => pair.id);
+
+    const latestRuns = latestRunIds.length
+      ? await this.prisma.testRun.findMany({
+          where: { id: { in: latestRunIds } },
+          include: testRunDetailInclude,
+        })
+      : [];
+
+    const latestRunDetails = await Promise.all(
+      latestRuns.map(async (run) => ({
+        run,
+        coverage: await this.buildCoverage(run),
+        passRate:
+          run.results.length > 0
+            ? run.results.filter((result) => result.evaluation === TestEvaluation.PASSED).length /
+              run.results.length
+            : null,
+      })),
+    );
+
+    const featureRunInfo = new Map<
+      string,
+      { run: TestRunRecord; coverage: RunCoverage; passRate: number | null }
+    >();
+    for (const detail of latestRunDetails) {
+      if (!detail.run.featureId) {
+        continue;
+      }
+      featureRunInfo.set(detail.run.featureId, detail);
+    }
+
+    const featureCoverage = features.map((feature) => {
+      const info = featureRunInfo.get(feature.id);
+      return {
+        featureId: feature.id,
+        featureName: feature.name,
+        hasDescription: Boolean(feature.description && feature.description.trim().length > 0),
+        hasTestRun: Boolean(info),
+        latestRun: info
+          ? {
+              id: info.run.id,
+              runDate: info.run.runDate,
+              status: info.run.status,
+              coverage: info.coverage,
+            }
+          : null,
+      };
+    });
+
+    const featureHealth = features.map((feature) => {
+      const info = featureRunInfo.get(feature.id);
+      return {
+        featureId: feature.id,
+        featureName: feature.name,
+        passRate: info?.passRate ?? null,
+        latestRun: info
+          ? {
+              id: info.run.id,
+              runDate: info.run.runDate,
+              status: info.run.status,
+            }
+          : null,
+      };
+    });
+    const passRates = featureHealth
+      .map((feature) => feature.passRate)
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+    const averagePassRate =
+      passRates.length > 0 ? passRates.reduce((sum, rate) => sum + rate, 0) / passRates.length : null;
+
+    const openRunsRaw = await this.prisma.testRun.findMany({
+      where: { projectId, status: TestRunStatus.OPEN },
+      orderBy: { runDate: 'desc' },
+      include: {
+        feature: { select: { id: true, name: true } },
+        runBy: { select: { id: true, name: true } },
+      },
+    });
+    const openRuns = openRunsRaw.map((run) => ({
+      id: run.id,
+      runDate: run.runDate,
+      environment: run.environment,
+      status: run.status,
+      feature: run.feature ? { id: run.feature.id, name: run.feature.name } : null,
+      runBy: run.runBy?.name ?? null,
+    }));
+
+    const runsWithFullPass = latestRunDetails
+      .filter(
+        ({ coverage }) =>
+          coverage.totalCases > 0 && coverage.executedCases === coverage.totalCases && coverage.missingCases === 0,
+      )
+      .filter(({ run }) => run.results.every((result) => result.evaluation === TestEvaluation.PASSED))
+      .map(({ run, coverage }) => ({
+        id: run.id,
+        runDate: run.runDate,
+        feature: run.feature ? { id: run.feature.id, name: run.feature.name } : null,
+        coverage,
+      }));
+
+    const featuresWithRuns = featureRunInfo.size;
+    const testCoverageRatio = totalFeatures > 0 ? featuresWithRuns / totalFeatures : null;
+
+    return {
+      projectId,
+      metrics: {
+        totalFeatures,
+        featuresMissingDescription: featuresMissingDescription.length,
+        featuresWithRuns,
+        testCoverageRatio,
+        openRuns: openRuns.length,
+        runsWithFullPass: runsWithFullPass.length,
+        averagePassRate,
+      },
+      reports: {
+        featuresMissingDescription,
+        featureCoverage,
+        featureHealth,
+        openRuns,
+        runsWithFullPass,
+      },
+    };
   }
 
   async getTestHealth(userId: string, featureId: string) {
