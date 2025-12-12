@@ -147,6 +147,61 @@ export class QaController {
     return this.qaService.getProjectDashboard(userId, projectId);
   }
 
+  @Get('projects/:projectId/dashboard/features-missing-description')
+  async getProjectDashboardFeaturesMissingDescription(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ) {
+    const userId = this.resolveUserId(user);
+    const options = this.resolveListQuery(query);
+    return this.qaService.getProjectDashboardFeaturesMissingDescription(userId, projectId, options);
+  }
+
+  @Get('projects/:projectId/dashboard/feature-coverage')
+  async getProjectDashboardFeatureCoverage(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ) {
+    const userId = this.resolveUserId(user);
+    const options = this.resolveListQuery(query);
+    return this.qaService.getProjectDashboardFeatureCoverage(userId, projectId, options);
+  }
+
+  @Get('projects/:projectId/dashboard/feature-health')
+  async getProjectDashboardFeatureHealth(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ) {
+    const userId = this.resolveUserId(user);
+    const options = this.resolveListQuery(query);
+    return this.qaService.getProjectDashboardFeatureHealth(userId, projectId, options);
+  }
+
+  @Get('projects/:projectId/dashboard/open-runs')
+  async getProjectDashboardOpenRuns(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ) {
+    const userId = this.resolveUserId(user);
+    const options = this.resolveListQuery(query);
+    return this.qaService.getProjectDashboardOpenRuns(userId, projectId, options);
+  }
+
+  @Get('projects/:projectId/dashboard/runs-with-full-pass')
+  async getProjectDashboardRunsWithFullPass(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ) {
+    const userId = this.resolveUserId(user);
+    const options = this.resolveListQuery(query);
+    return this.qaService.getProjectDashboardRunsWithFullPass(userId, projectId, options);
+  }
+
   @Get('features/:featureId/test-health')
   async getTestHealth(
     @CurrentUser() user: AccessTokenPayload | undefined,
@@ -165,5 +220,37 @@ export class QaController {
     }
     // TODO: replace stub once authentication pipeline guarantees req.user.id
     return 'stub-user-id';
+  }
+
+  private resolvePagination(page?: string, pageSize?: string) {
+    const parsedPage = Number(page ?? 1);
+    const parsedPageSize = Number(pageSize ?? 20);
+    const safePage = Number.isFinite(parsedPage) && parsedPage > 0 ? Math.min(Math.floor(parsedPage), 1000) : 1;
+    const safePageSize =
+      Number.isFinite(parsedPageSize) && parsedPageSize > 0 ? Math.min(Math.floor(parsedPageSize), 100) : 20;
+    return { page: safePage, pageSize: safePageSize };
+  }
+
+  private resolveListQuery(query: Record<string, string | string[] | undefined>) {
+    const page = this.extractQueryValue(query.page);
+    const pageSize = this.extractQueryValue(query.pageSize);
+    const sort = this.extractQueryValue(query.sort);
+    const filterEntries = Object.entries(query)
+      .filter(([key]) => !['page', 'pageSize', 'sort'].includes(key))
+      .map(([key, value]) => [key, this.extractQueryValue(value)])
+      .filter(([, value]) => value !== undefined) as Array<[string, string]>;
+    const filters = Object.fromEntries(filterEntries) as Record<string, string | undefined>;
+    return {
+      pagination: this.resolvePagination(page, pageSize),
+      sort,
+      filters,
+    };
+  }
+
+  private extractQueryValue(value?: string | string[]) {
+    if (Array.isArray(value)) {
+      return value[0];
+    }
+    return value;
   }
 }

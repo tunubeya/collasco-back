@@ -71,6 +71,79 @@ type TestRunRecord = Prisma.TestRunGetPayload<{
 
 type TestRunDetail = TestRunRecord & { coverage: RunCoverage };
 
+type ProjectDashboardMetrics = {
+  totalFeatures: number;
+  featuresMissingDescription: number;
+  featuresWithRuns: number;
+  testCoverageRatio: number | null;
+  openRuns: number;
+  runsWithFullPass: number;
+  averagePassRate: number | null;
+};
+
+type ProjectDashboardReports = {
+  featuresMissingDescription: Array<{ id: string; name: string }>;
+  featureCoverage: Array<{
+    featureId: string;
+    featureName: string;
+    hasDescription: boolean;
+    hasTestRun: boolean;
+    latestRun: {
+      id: string;
+      runDate: Date;
+      status: TestRunStatus;
+      coverage: RunCoverage;
+    } | null;
+  }>;
+  featureHealth: Array<{
+    featureId: string;
+    featureName: string;
+    passRate: number | null;
+    latestRun: {
+      id: string;
+      runDate: Date;
+      status: TestRunStatus;
+    } | null;
+  }>;
+  openRuns: Array<{
+    id: string;
+    runDate: Date;
+    environment: string | null;
+    status: TestRunStatus;
+    feature: { id: string; name: string } | null;
+    runBy: string | null;
+  }>;
+  runsWithFullPass: Array<{
+    id: string;
+    runDate: Date;
+    feature: { id: string; name: string } | null;
+    coverage: RunCoverage;
+  }>;
+};
+
+type ProjectDashboardData = {
+  metrics: ProjectDashboardMetrics;
+  reports: ProjectDashboardReports;
+};
+
+type PaginationInput = {
+  page: number;
+  pageSize: number;
+};
+
+type PaginatedResult<T> = {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+type ListQueryOptions = {
+  pagination: PaginationInput;
+  filters?: Record<string, string | undefined>;
+  sort?: string;
+};
+
 @Injectable()
 export class QaService {
   private readonly logger = new Logger(QaService.name);
@@ -567,7 +640,14 @@ export class QaService {
 
   async getProjectDashboard(userId: string, projectId: string) {
     await assertProjectRead(this.prisma, userId, projectId);
+    const data = await this.buildProjectDashboardData(projectId);
+    return {
+      projectId,
+      metrics: data.metrics,
+    };
+  }
 
+  private async buildProjectDashboardData(projectId: string): Promise<ProjectDashboardData> {
     const features = await this.prisma.feature.findMany({
       where: { module: { projectId } },
       select: { id: true, name: true, description: true },
@@ -688,7 +768,6 @@ export class QaService {
     const testCoverageRatio = totalFeatures > 0 ? featuresWithRuns / totalFeatures : null;
 
     return {
-      projectId,
       metrics: {
         totalFeatures,
         featuresMissingDescription: featuresMissingDescription.length,
@@ -706,6 +785,97 @@ export class QaService {
         runsWithFullPass,
       },
     };
+  }
+
+  async getProjectDashboardFeaturesMissingDescription(
+    userId: string,
+    projectId: string,
+    options: ListQueryOptions,
+  ): Promise<PaginatedResult<{ id: string; name: string }>> {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const data = await this.buildProjectDashboardData(projectId);
+    return this.paginateArray(data.reports.featuresMissingDescription, options.pagination);
+  }
+
+  async getProjectDashboardFeatureCoverage(
+    userId: string,
+    projectId: string,
+    options: ListQueryOptions,
+  ): Promise<
+    PaginatedResult<{
+      featureId: string;
+      featureName: string;
+      hasDescription: boolean;
+      hasTestRun: boolean;
+      latestRun: {
+        id: string;
+        runDate: Date;
+        status: TestRunStatus;
+        coverage: RunCoverage;
+      } | null;
+    }>
+  > {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const data = await this.buildProjectDashboardData(projectId);
+    const sorted = this.sortFeatureCoverage(data.reports.featureCoverage, options.sort);
+    return this.paginateArray(sorted, options.pagination);
+  }
+
+  async getProjectDashboardFeatureHealth(
+    userId: string,
+    projectId: string,
+    options: ListQueryOptions,
+  ): Promise<
+    PaginatedResult<{
+      featureId: string;
+      featureName: string;
+      passRate: number | null;
+      latestRun: {
+        id: string;
+        runDate: Date;
+        status: TestRunStatus;
+      } | null;
+    }>
+  > {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const data = await this.buildProjectDashboardData(projectId);
+    return this.paginateArray(data.reports.featureHealth, options.pagination);
+  }
+
+  async getProjectDashboardOpenRuns(
+    userId: string,
+    projectId: string,
+    options: ListQueryOptions,
+  ): Promise<
+    PaginatedResult<{
+      id: string;
+      runDate: Date;
+      environment: string | null;
+      status: TestRunStatus;
+      feature: { id: string; name: string } | null;
+      runBy: string | null;
+    }>
+  > {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const data = await this.buildProjectDashboardData(projectId);
+    return this.paginateArray(data.reports.openRuns, options.pagination);
+  }
+
+  async getProjectDashboardRunsWithFullPass(
+    userId: string,
+    projectId: string,
+    options: ListQueryOptions,
+  ): Promise<
+    PaginatedResult<{
+      id: string;
+      runDate: Date;
+      feature: { id: string; name: string } | null;
+      coverage: RunCoverage;
+    }>
+  > {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const data = await this.buildProjectDashboardData(projectId);
+    return this.paginateArray(data.reports.runsWithFullPass, options.pagination);
   }
 
   async getTestHealth(userId: string, featureId: string) {
@@ -1036,5 +1206,57 @@ export class QaService {
       },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  private sortFeatureCoverage(
+    items: Array<{
+      featureId: string;
+      featureName: string;
+      hasDescription: boolean;
+      hasTestRun: boolean;
+      latestRun: {
+        id: string;
+        runDate: Date;
+        status: TestRunStatus;
+        coverage: RunCoverage;
+      } | null;
+    }>,
+    sort?: string,
+  ) {
+    if (!sort) {
+      return items;
+    }
+    if (sort !== 'coverageAsc' && sort !== 'coverageDesc') {
+      throw new BadRequestException('Invalid sort parameter. Use coverageAsc or coverageDesc.');
+    }
+    const direction = sort === 'coverageAsc' ? 1 : -1;
+    return [...items].sort((a, b) => {
+      const ratioA = this.calculateCoverageRatio(a.latestRun?.coverage ?? null);
+      const ratioB = this.calculateCoverageRatio(b.latestRun?.coverage ?? null);
+      if (ratioA === ratioB) {
+        return a.featureName.localeCompare(b.featureName);
+      }
+      return ratioA > ratioB ? direction : -direction;
+    });
+  }
+
+  private calculateCoverageRatio(coverage: RunCoverage | null): number {
+    if (!coverage || coverage.totalCases <= 0) {
+      return 0;
+    }
+    return coverage.executedCases / coverage.totalCases;
+  }
+
+  private paginateArray<T>(items: T[], pagination: PaginationInput): PaginatedResult<T> {
+    const page = Math.max(1, Math.floor(pagination.page));
+    const pageSize = Math.max(1, Math.floor(pagination.pageSize));
+    const startIndex = (page - 1) * pageSize;
+    const endIndex = startIndex + pageSize;
+    return {
+      items: items.slice(startIndex, endIndex),
+      total: items.length,
+      page,
+      pageSize,
+    };
   }
 }
