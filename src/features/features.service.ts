@@ -242,7 +242,7 @@ export class FeaturesService {
         moduleId,
         name: dto.name,
         description: dto.description ?? null,
-        priority: dto.priority,
+        priority: dto.priority === null ? null : dto.priority ?? undefined,
         status: dto.status === null ? null : dto.status ?? FeatureStatus.PENDING,
         lastModifiedById: user.sub,
         sortOrder: nextOrder,
@@ -312,7 +312,7 @@ export class FeaturesService {
     const baseData = {
       name: dto.name ?? undefined,
       description: dto.description ?? undefined,
-      priority: dto.priority ?? undefined,
+      priority: dto.priority === null ? null : dto.priority ?? undefined,
       status: dto.status === null ? null : dto.status ?? undefined,
       lastModifiedById: user.sub,
     };

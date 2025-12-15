@@ -14,7 +14,7 @@ export class UpdateFeatureDto {
 
   @IsOptional()
   @IsEnum(FeaturePriority)
-  priority?: FeaturePriority;
+  priority?: FeaturePriority | null;
 
   @IsOptional()
   @IsEnum(FeatureStatus)
