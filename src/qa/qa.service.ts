@@ -1062,150 +1062,59 @@ export class QaService {
 
   private async buildCoverage(run: TestRunRecord): Promise<RunCoverage> {
     const executedIds = new Set(run.results.map((result) => result.testCaseId));
-    if (run.isTargetScopeCustom) {
-      const scope = run.featureId ? 'FEATURE' : 'PROJECT';
-      const targetCases = run.targetCaseIds.length
-        ? await this.prisma.testCase.findMany({
-            where: { id: { in: run.targetCaseIds } },
-            select: {
-              id: true,
-              name: true,
-              featureId: true,
-              feature: { select: { id: true, name: true } },
-            },
-          })
-        : [];
-      const scopeCases = await this.listScopeCasesForRun(run);
-      const orderMap = new Map(targetCases.map((testCase) => [testCase.id, testCase]));
-      const orderedTargetCases = run.targetCaseIds
-        .map((id) => orderMap.get(id))
-        .filter((testCase): testCase is (typeof targetCases)[number] => Boolean(testCase));
-      const targetSet = new Set(run.targetCaseIds);
-      const additionalCases = scopeCases.filter((testCase) => !targetSet.has(testCase.id));
-      const orderedCases = [...orderedTargetCases, ...additionalCases];
-      const missingCases = orderedCases.filter((testCase) => !executedIds.has(testCase.id));
-      return {
-        scope,
-        totalCases: orderedCases.length,
-        executedCases: orderedCases.length - missingCases.length,
-        missingCases: missingCases.length,
-        missingTestCases: missingCases.map((testCase) => ({
-          id: testCase.id,
-          name: testCase.name,
-          featureId: testCase.featureId,
-          featureName: testCase.feature?.name ?? run.feature?.name ?? 'Unknown feature',
-        })),
-      };
-    }
+    const targetIds =
+      run.targetCaseIds.length > 0
+        ? Array.from(new Set(run.targetCaseIds))
+        : Array.from(executedIds);
 
-    if (run.featureId) {
-      const cases = await this.prisma.testCase.findMany({
-        where: { featureId: run.featureId, isArchived: false },
-        select: {
-          id: true,
-          name: true,
-          featureId: true,
-        },
-        orderBy: { createdAt: 'asc' },
-      });
-      const missing = cases.filter((testCase) => !executedIds.has(testCase.id));
-      const featureName = run.feature?.name ?? 'Unknown feature';
-      return {
-        scope: 'FEATURE',
-        totalCases: cases.length,
-        executedCases: cases.length - missing.length,
-        missingCases: missing.length,
-        missingTestCases: missing.map((testCase) => ({
-          id: testCase.id,
-          name: testCase.name,
-          featureId: testCase.featureId,
-          featureName,
-        })),
-      };
-    }
+    const scope = run.featureId ? 'FEATURE' : 'PROJECT';
+    const missingIds = targetIds.filter((id) => !executedIds.has(id));
+    const executedCount = targetIds.length - missingIds.length;
 
-    const projectCases = await this.prisma.testCase.findMany({
-      where: {
-        feature: {
-          module: {
-            projectId: run.project.id,
-          },
-        },
-        isArchived: false,
-      },
-      select: {
-        id: true,
-        name: true,
-        featureId: true,
-        feature: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-    const missingProjectCases = projectCases.filter((testCase) => !executedIds.has(testCase.id));
-    return {
-      scope: 'PROJECT',
-      totalCases: projectCases.length,
-      executedCases: projectCases.length - missingProjectCases.length,
-      missingCases: missingProjectCases.length,
-      missingTestCases: missingProjectCases.map((testCase) => ({
-        id: testCase.id,
-        name: testCase.name,
-        featureId: testCase.featureId,
-        featureName: testCase.feature?.name ?? 'Unknown feature',
-      })),
-    };
-  }
+    const detailMap = new Map<
+      string,
+      { id: string; name: string; featureId: string; featureName: string }
+    >();
 
-  private async listScopeCasesForRun(
-    run: TestRunRecord,
-  ): Promise<
-    Array<{
-      id: string;
-      name: string;
-      featureId: string;
-      feature: { id: string; name: string } | null;
-    }>
-  > {
-    if (run.featureId) {
-      return this.prisma.testCase.findMany({
-        where: { featureId: run.featureId, isArchived: false },
+    if (targetIds.length > 0) {
+      const caseDetails = await this.prisma.testCase.findMany({
+        where: { id: { in: targetIds } },
         select: {
           id: true,
           name: true,
           featureId: true,
           feature: { select: { id: true, name: true } },
         },
-        orderBy: { createdAt: 'asc' },
       });
+      for (const testCase of caseDetails) {
+        detailMap.set(testCase.id, {
+          id: testCase.id,
+          name: testCase.name,
+          featureId: testCase.featureId,
+          featureName: testCase.feature?.name ?? 'Unknown feature',
+        });
+      }
     }
 
-    return this.prisma.testCase.findMany({
-      where: {
-        feature: {
-          module: {
-            projectId: run.project.id,
-          },
-        },
-        isArchived: false,
-      },
-      select: {
-        id: true,
-        name: true,
-        featureId: true,
-        feature: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'asc' },
+    const missingTestCases = missingIds.map((id) => {
+      const fallbackFeatureName = run.feature?.name ?? 'Unknown feature';
+      const fallbackFeatureId = run.featureId ?? 'unknown';
+      const detail = detailMap.get(id);
+      return {
+        id,
+        name: detail?.name ?? 'Unknown test case',
+        featureId: detail?.featureId ?? fallbackFeatureId,
+        featureName: detail?.featureName ?? fallbackFeatureName,
+      };
     });
+
+    return {
+      scope,
+      totalCases: targetIds.length,
+      executedCases: executedCount,
+      missingCases: missingIds.length,
+      missingTestCases,
+    };
   }
 
   private sortFeatureCoverage(
