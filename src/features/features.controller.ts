@@ -64,6 +64,8 @@ export class FeaturesController {
     @Param('featureId', new ParseUUIDPipe()) featureId: string,
     @Body() dto: UpdateFeatureDto,
   ) {
+    console.log(dto);
+    
     return this.service.update(user, featureId, dto);
   }
 

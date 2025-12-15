@@ -17,5 +17,5 @@ export class CreateFeatureDto {
 
   @IsOptional()
   @IsEnum(FeatureStatus)
-  status?: FeatureStatus;
+  status?: FeatureStatus | null;
 }

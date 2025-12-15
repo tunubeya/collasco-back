@@ -243,7 +243,7 @@ export class FeaturesService {
         name: dto.name,
         description: dto.description ?? null,
         priority: dto.priority,
-        status: dto.status ?? FeatureStatus.PENDING,
+        status: dto.status === null ? null : dto.status ?? FeatureStatus.PENDING,
         lastModifiedById: user.sub,
         sortOrder: nextOrder,
       },
@@ -313,7 +313,7 @@ export class FeaturesService {
       name: dto.name ?? undefined,
       description: dto.description ?? undefined,
       priority: dto.priority ?? undefined,
-      status: dto.status ?? undefined,
+      status: dto.status === null ? null : dto.status ?? undefined,
       lastModifiedById: user.sub,
     };
 

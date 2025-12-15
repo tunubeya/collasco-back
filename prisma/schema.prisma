@@ -242,7 +242,7 @@ model Feature {
   name               String
   description        String?
   priority           FeaturePriority?
-  status             FeatureStatus    @default(PENDING)
+  status             FeatureStatus?   @default(PENDING)
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   lastModifiedById   String?

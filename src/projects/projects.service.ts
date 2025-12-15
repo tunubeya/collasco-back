@@ -33,7 +33,7 @@ type FeatureRow = {
   moduleId: string;
   name: string;
   description: string | null;
-  status: import('@prisma/client').FeatureStatus;
+  status: import('@prisma/client').FeatureStatus | null;
   priority: import('@prisma/client').FeaturePriority | null;
   sortOrder: number;
   createdAt: Date;
@@ -46,7 +46,7 @@ type TreeFeatureNode = {
   moduleId: string;
   name: string;
   description: string | null;
-  status: import('@prisma/client').FeatureStatus;
+  status: import('@prisma/client').FeatureStatus | null;
   priority: import('@prisma/client').FeaturePriority | null;
   sortOrder: number | null;
   order: number;
