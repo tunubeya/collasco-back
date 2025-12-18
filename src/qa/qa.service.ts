@@ -650,12 +650,13 @@ export class QaService {
   private async buildProjectDashboardData(projectId: string): Promise<ProjectDashboardData> {
     const features = await this.prisma.feature.findMany({
       where: { module: { projectId } },
-      select: { id: true, name: true, description: true },
+      select: { id: true, name: true, description: true, createdAt: true },
       orderBy: { name: 'asc' },
     });
     const totalFeatures = features.length;
     const featuresMissingDescription = features
       .filter((feature) => !feature.description || feature.description.trim().length === 0)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((feature) => ({ id: feature.id, name: feature.name }));
 
     const latestRunPairs = await this.prisma.$queryRaw<
@@ -839,7 +840,11 @@ export class QaService {
   > {
     await assertProjectRead(this.prisma, userId, projectId);
     const data = await this.buildProjectDashboardData(projectId);
-    return this.paginateArray(data.reports.featureHealth, options.pagination);
+    const sorted = this.sortByLatestRunDateDescending(
+      data.reports.featureHealth,
+      (feature) => feature.latestRun?.runDate ?? null,
+    );
+    return this.paginateArray(sorted, options.pagination);
   }
 
   async getProjectDashboardOpenRuns(
@@ -875,7 +880,11 @@ export class QaService {
   > {
     await assertProjectRead(this.prisma, userId, projectId);
     const data = await this.buildProjectDashboardData(projectId);
-    return this.paginateArray(data.reports.runsWithFullPass, options.pagination);
+    const sorted = this.sortByLatestRunDateDescending(
+      data.reports.runsWithFullPass,
+      (run) => run.runDate,
+    );
+    return this.paginateArray(sorted, options.pagination);
   }
 
   async getTestHealth(userId: string, featureId: string) {
@@ -1133,7 +1142,7 @@ export class QaService {
     sort?: string,
   ) {
     if (!sort) {
-      return items;
+      return this.sortByLatestRunDateDescending(items, (item) => item.latestRun?.runDate ?? null);
     }
     if (sort !== 'coverageAsc' && sort !== 'coverageDesc') {
       throw new BadRequestException('Invalid sort parameter. Use coverageAsc or coverageDesc.');
@@ -1167,5 +1176,25 @@ export class QaService {
       page,
       pageSize,
     };
+  }
+
+  private sortByLatestRunDateDescending<T>(
+    items: T[],
+    getRunDate: (item: T) => Date | null | undefined,
+  ): T[] {
+    return [...items].sort((a, b) => {
+      const dateA = getRunDate(a);
+      const dateB = getRunDate(b);
+      if (dateA && dateB) {
+        return dateB.getTime() - dateA.getTime();
+      }
+      if (dateA) {
+        return -1;
+      }
+      if (dateB) {
+        return 1;
+      }
+      return 0;
+    });
   }
 }
