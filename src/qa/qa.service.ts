@@ -74,31 +74,38 @@ type TestRunDetail = TestRunRecord & { coverage: RunCoverage };
 type ProjectDashboardMetrics = {
   totalFeatures: number;
   featuresMissingDescription: number;
+  featuresWithoutTestCases: number;
   featuresWithRuns: number;
   testCoverageRatio: number | null;
   openRuns: number;
   runsWithFullPass: number;
-  averagePassRate: number | null;
 };
 
 type ProjectDashboardReports = {
   featuresMissingDescription: Array<{ id: string; name: string }>;
+  featuresWithoutTestCases: Array<{ id: string; name: string }>;
   featureCoverage: Array<{
     featureId: string;
     featureName: string;
-    hasDescription: boolean;
-    hasTestRun: boolean;
+    totalTestCases: number;
+    executedTestCases: number;
+    missingTestCases: number;
+    coverageRatio: number | null;
     latestRun: {
       id: string;
       runDate: Date;
       status: TestRunStatus;
-      coverage: RunCoverage;
     } | null;
   }>;
   featureHealth: Array<{
     featureId: string;
     featureName: string;
     passRate: number | null;
+    executedTestCases: number;
+    passedTestCases: number;
+    failedTestCases: number;
+    hasMissingTestCases: boolean;
+    missingTestCasesCount: number;
     latestRun: {
       id: string;
       runDate: Date;
@@ -641,9 +648,11 @@ export class QaService {
   async getProjectDashboard(userId: string, projectId: string) {
     await assertProjectRead(this.prisma, userId, projectId);
     const data = await this.buildProjectDashboardData(projectId);
+    const { featuresWithoutTestCases } = data.metrics;
     return {
       projectId,
       metrics: data.metrics,
+      featuresWithoutTestCases,
     };
   }
 
@@ -656,6 +665,25 @@ export class QaService {
     const totalFeatures = features.length;
     const featuresMissingDescription = features
       .filter((feature) => !feature.description || feature.description.trim().length === 0)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((feature) => ({ id: feature.id, name: feature.name }));
+    const featureTestCaseCountsRaw = await this.prisma.testCase.groupBy({
+      by: ['featureId'],
+      where: {
+        isArchived: false,
+        feature: {
+          module: { projectId },
+        },
+      },
+      _count: {
+        _all: true,
+      },
+    });
+    const featureTestCaseCounts = new Map(
+      featureTestCaseCountsRaw.map((row) => [row.featureId, row._count._all]),
+    );
+    const featuresWithoutTestCases = features
+      .filter((feature) => (featureTestCaseCounts.get(feature.id) ?? 0) === 0)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((feature) => ({ id: feature.id, name: feature.name }));
 
@@ -696,44 +724,71 @@ export class QaService {
       featureRunInfo.set(detail.run.featureId, detail);
     }
 
-    const featureCoverage = features.map((feature) => {
-      const info = featureRunInfo.get(feature.id);
-      return {
-        featureId: feature.id,
-        featureName: feature.name,
-        hasDescription: Boolean(feature.description && feature.description.trim().length > 0),
-        hasTestRun: Boolean(info),
-        latestRun: info
-          ? {
-              id: info.run.id,
-              runDate: info.run.runDate,
-              status: info.run.status,
-              coverage: info.coverage,
-            }
-          : null,
-      };
-    });
+    const featureCoverage = features
+      .map((feature) => {
+        const info = featureRunInfo.get(feature.id);
+        if (!info) {
+          return null;
+        }
+        const totalTestCases = featureTestCaseCounts.get(feature.id) ?? 0;
+        const executedTestCases = new Set(info.run.results.map((result) => result.testCaseId)).size;
+        const missingTestCases = Math.max(totalTestCases - executedTestCases, 0);
+        const coverageRatio = totalTestCases > 0 ? executedTestCases / totalTestCases : null;
+        return {
+          featureId: feature.id,
+          featureName: feature.name,
+          totalTestCases,
+          executedTestCases,
+          missingTestCases,
+          coverageRatio,
+          latestRun: {
+            id: info.run.id,
+            runDate: info.run.runDate,
+            status: info.run.status,
+          },
+        };
+      })
+      .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature));
 
-    const featureHealth = features.map((feature) => {
-      const info = featureRunInfo.get(feature.id);
-      return {
-        featureId: feature.id,
-        featureName: feature.name,
-        passRate: info?.passRate ?? null,
-        latestRun: info
-          ? {
-              id: info.run.id,
-              runDate: info.run.runDate,
-              status: info.run.status,
-            }
-          : null,
-      };
-    });
-    const passRates = featureHealth
-      .map((feature) => feature.passRate)
-      .filter((value): value is number => value !== null && Number.isFinite(value));
-    const averagePassRate =
-      passRates.length > 0 ? passRates.reduce((sum, rate) => sum + rate, 0) / passRates.length : null;
+    const featureHealth = features
+      .map((feature) => {
+        const info = featureRunInfo.get(feature.id);
+        if (!info) {
+          return null;
+        }
+        const testCaseCount = featureTestCaseCounts.get(feature.id) ?? 0;
+        const executedEvaluations = new Map<string, TestEvaluation>();
+        for (const result of info.run.results) {
+          executedEvaluations.set(result.testCaseId, result.evaluation);
+        }
+        let passedTestCases = 0;
+        let failedTestCases = 0;
+        for (const evaluation of executedEvaluations.values()) {
+          if (evaluation === TestEvaluation.PASSED) {
+            passedTestCases += 1;
+          } else {
+            failedTestCases += 1;
+          }
+        }
+        const executedTestCases = executedEvaluations.size;
+        const missingTestCasesCount = Math.max(testCaseCount - executedTestCases, 0);
+        return {
+          featureId: feature.id,
+          featureName: feature.name,
+          passRate: info?.passRate ?? null,
+          executedTestCases,
+          passedTestCases,
+          failedTestCases,
+          hasMissingTestCases: missingTestCasesCount > 0,
+          missingTestCasesCount,
+          latestRun: {
+            id: info.run.id,
+            runDate: info.run.runDate,
+            status: info.run.status,
+          },
+        };
+      })
+      .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature));
 
     const openRunsRaw = await this.prisma.testRun.findMany({
       where: { projectId, status: TestRunStatus.OPEN },
@@ -772,14 +827,15 @@ export class QaService {
       metrics: {
         totalFeatures,
         featuresMissingDescription: featuresMissingDescription.length,
+        featuresWithoutTestCases: featuresWithoutTestCases.length,
         featuresWithRuns,
         testCoverageRatio,
         openRuns: openRuns.length,
         runsWithFullPass: runsWithFullPass.length,
-        averagePassRate,
       },
       reports: {
         featuresMissingDescription,
+        featuresWithoutTestCases,
         featureCoverage,
         featureHealth,
         openRuns,
@@ -798,6 +854,16 @@ export class QaService {
     return this.paginateArray(data.reports.featuresMissingDescription, options.pagination);
   }
 
+  async getProjectDashboardFeaturesWithoutTestCases(
+    userId: string,
+    projectId: string,
+    options: ListQueryOptions,
+  ): Promise<PaginatedResult<{ id: string; name: string }>> {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const data = await this.buildProjectDashboardData(projectId);
+    return this.paginateArray(data.reports.featuresWithoutTestCases, options.pagination);
+  }
+
   async getProjectDashboardFeatureCoverage(
     userId: string,
     projectId: string,
@@ -806,19 +872,27 @@ export class QaService {
     PaginatedResult<{
       featureId: string;
       featureName: string;
-      hasDescription: boolean;
-      hasTestRun: boolean;
+      totalTestCases: number;
+      executedTestCases: number;
+      missingTestCases: number;
+      coverageRatio: number | null;
       latestRun: {
         id: string;
         runDate: Date;
         status: TestRunStatus;
-        coverage: RunCoverage;
       } | null;
     }>
   > {
     await assertProjectRead(this.prisma, userId, projectId);
     const data = await this.buildProjectDashboardData(projectId);
-    const sorted = this.sortFeatureCoverage(data.reports.featureCoverage, options.sort);
+    const query = options.filters?.query?.trim().toLowerCase() ?? null;
+    const filtered = query
+      ? data.reports.featureCoverage.filter((feature) => {
+          const featureName = feature.featureName.toLowerCase();
+          return featureName.includes(query) || feature.featureId.toLowerCase().includes(query);
+        })
+      : data.reports.featureCoverage;
+    const sorted = this.sortFeatureCoverage(filtered, options.sort);
     return this.paginateArray(sorted, options.pagination);
   }
 
@@ -831,6 +905,11 @@ export class QaService {
       featureId: string;
       featureName: string;
       passRate: number | null;
+      executedTestCases: number;
+      passedTestCases: number;
+      failedTestCases: number;
+      hasMissingTestCases: boolean;
+      missingTestCasesCount: number;
       latestRun: {
         id: string;
         runDate: Date;
@@ -891,6 +970,10 @@ export class QaService {
     const projectId = await this.getProjectIdOrThrow(featureId);
     await assertProjectRead(this.prisma, userId, projectId);
 
+    const totalTestCases = await this.prisma.testCase.count({
+      where: { featureId, isArchived: false },
+    });
+
     const latestRun = await this.prisma.testRun.findFirst({
       where: { featureId },
       orderBy: { runDate: 'desc' },
@@ -902,16 +985,28 @@ export class QaService {
         featureId,
         lastRun: null,
         passRate: null,
+        allTestCasesCovered: totalTestCases === 0,
+        testCaseCounts: {
+          total: totalTestCases,
+          executed: 0,
+        },
       };
     }
 
     const coverage = await this.buildCoverage(latestRun);
     const passRate = this.calculatePassRate(latestRun, coverage);
+    const executedTestCases = new Set(latestRun.results.map((result) => result.testCaseId)).size;
+    const allTestCasesCovered = totalTestCases === 0 ? true : executedTestCases >= totalTestCases;
 
     return {
       featureId,
       lastRun: { id: latestRun.id, runDate: latestRun.runDate },
       passRate,
+      allTestCasesCovered,
+      testCaseCounts: {
+        total: totalTestCases,
+        executed: executedTestCases,
+      },
     };
   }
 
@@ -1130,13 +1225,14 @@ export class QaService {
     items: Array<{
       featureId: string;
       featureName: string;
-      hasDescription: boolean;
-      hasTestRun: boolean;
+      totalTestCases: number;
+      executedTestCases: number;
+      missingTestCases: number;
+      coverageRatio: number | null;
       latestRun: {
         id: string;
         runDate: Date;
         status: TestRunStatus;
-        coverage: RunCoverage;
       } | null;
     }>,
     sort?: string,
@@ -1149,20 +1245,28 @@ export class QaService {
     }
     const direction = sort === 'coverageAsc' ? 1 : -1;
     return [...items].sort((a, b) => {
-      const ratioA = this.calculateCoverageRatio(a.latestRun?.coverage ?? null);
-      const ratioB = this.calculateCoverageRatio(b.latestRun?.coverage ?? null);
+      const ratioA = a.coverageRatio ?? 0;
+      const ratioB = b.coverageRatio ?? 0;
       if (ratioA === ratioB) {
+        const dateA = a.latestRun?.runDate ?? null;
+        const dateB = b.latestRun?.runDate ?? null;
+        if (dateA && dateB) {
+          const diff = dateB.getTime() - dateA.getTime();
+          if (diff !== 0) {
+            return diff;
+          }
+          return a.featureName.localeCompare(b.featureName);
+        }
+        if (dateA) {
+          return -1;
+        }
+        if (dateB) {
+          return 1;
+        }
         return a.featureName.localeCompare(b.featureName);
       }
       return ratioA > ratioB ? direction : -direction;
     });
-  }
-
-  private calculateCoverageRatio(coverage: RunCoverage | null): number {
-    if (!coverage || coverage.totalCases <= 0) {
-      return 0;
-    }
-    return coverage.executedCases / coverage.totalCases;
   }
 
   private paginateArray<T>(items: T[], pagination: PaginationInput): PaginatedResult<T> {
