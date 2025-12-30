@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -18,6 +19,7 @@ import { CreateTestRunDto } from './dto/create-test-run.dto';
 import { CreateProjectTestRunDto } from './dto/create-project-test-run.dto';
 import { UpsertResultsDto } from './dto/upsert-results.dto';
 import { UpdateTestRunDto } from './dto/update-test-run.dto';
+import { LinkFeatureDto } from './dto/link-feature.dto';
 
 @Controller('qa')
 export class QaController {
@@ -42,6 +44,35 @@ export class QaController {
     const userId = this.resolveUserId(user);
     const include = includeArchived === 'true';
     return this.qaService.listTestCases(userId, featureId, include);
+  }
+
+  @Get('features/:featureId/linked-features')
+  async listLinkedFeatures(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('featureId', ParseUUIDPipe) featureId: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.listLinkedFeatures(userId, featureId);
+  }
+
+  @Post('features/:featureId/linked-features')
+  async linkFeature(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('featureId', ParseUUIDPipe) featureId: string,
+    @Body() dto: LinkFeatureDto,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.linkFeatures(userId, featureId, dto.targetFeatureId, dto.reason);
+  }
+
+  @Delete('features/:featureId/linked-features/:linkedFeatureId')
+  async unlinkFeature(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('featureId', ParseUUIDPipe) featureId: string,
+    @Param('linkedFeatureId', ParseUUIDPipe) linkedFeatureId: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.unlinkFeatures(userId, featureId, linkedFeatureId);
   }
 
   @Patch('test-cases/:id')

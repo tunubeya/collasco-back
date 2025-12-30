@@ -139,6 +139,14 @@ type ProjectDashboardData = {
   reports: ProjectDashboardReports;
 };
 
+type LinkedFeatureSummary = {
+  id: string;
+  name: string;
+  moduleId: string;
+  moduleName: string;
+  reason: string | null;
+};
+
 type PaginationInput = {
   page: number;
   pageSize: number;
@@ -212,6 +220,111 @@ export class QaService {
       },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  async listLinkedFeatures(userId: string, featureId: string): Promise<LinkedFeatureSummary[]> {
+    const projectId = await this.getProjectIdOrThrow(featureId);
+    await assertProjectRead(this.prisma, userId, projectId);
+
+    const links = await this.prisma.featureLink.findMany({
+      where: {
+        OR: [{ featureId }, { linkedFeatureId: featureId }],
+      },
+      include: {
+        feature: {
+          select: {
+            id: true,
+            name: true,
+            module: { select: { id: true, name: true } },
+          },
+        },
+        linkedFeature: {
+          select: {
+            id: true,
+            name: true,
+            module: { select: { id: true, name: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return links.map((link) => {
+      const other =
+        link.featureId === featureId
+          ? link.linkedFeature
+          : link.feature;
+      return {
+        id: other.id,
+        name: other.name,
+        moduleId: other.module.id,
+        moduleName: other.module.name,
+        reason: link.reason ?? null,
+      };
+    });
+  }
+
+  async linkFeatures(
+    userId: string,
+    featureId: string,
+    targetFeatureId: string,
+    reason?: string,
+  ): Promise<LinkedFeatureSummary[]> {
+    if (featureId === targetFeatureId) {
+      throw new BadRequestException('Cannot link a feature to itself.');
+    }
+
+    const [projectId, targetProjectId] = await Promise.all([
+      this.getProjectIdOrThrow(featureId),
+      this.getProjectIdOrThrow(targetFeatureId),
+    ]);
+    if (projectId !== targetProjectId) {
+      throw new BadRequestException('Linked features must belong to the same project.');
+    }
+
+    await assertProjectWrite(this.prisma, userId, projectId);
+
+    const pair = this.normalizeFeatureLinkPair(featureId, targetFeatureId);
+    await this.prisma.featureLink.upsert({
+      where: {
+        featureId_linkedFeatureId: {
+          featureId: pair.featureId,
+          linkedFeatureId: pair.linkedFeatureId,
+        },
+      },
+      update: reason !== undefined ? { reason } : {},
+      create: {
+        featureId: pair.featureId,
+        linkedFeatureId: pair.linkedFeatureId,
+        reason: reason ?? null,
+      },
+    });
+
+    return this.listLinkedFeatures(userId, featureId);
+  }
+
+  async unlinkFeatures(
+    userId: string,
+    featureId: string,
+    linkedFeatureId: string,
+  ): Promise<LinkedFeatureSummary[]> {
+    if (featureId === linkedFeatureId) {
+      throw new BadRequestException('Cannot remove a self link.');
+    }
+    const projectId = await this.getProjectIdOrThrow(featureId);
+    await assertProjectWrite(this.prisma, userId, projectId);
+
+    const pair = this.normalizeFeatureLinkPair(featureId, linkedFeatureId);
+    const result = await this.prisma.featureLink.deleteMany({
+      where: {
+        featureId: pair.featureId,
+        linkedFeatureId: pair.linkedFeatureId,
+      },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Linked feature relationship not found.');
+    }
+    return this.listLinkedFeatures(userId, featureId);
   }
 
   async updateTestCase(userId: string, testCaseId: string, dto: UpdateTestCaseDto) {
@@ -1054,6 +1167,15 @@ export class QaService {
 
   private getEvaluationOrDefault(evaluation?: TestEvaluation): TestEvaluation {
     return evaluation ?? TestEvaluation.NOT_STARTED;
+  }
+
+  private normalizeFeatureLinkPair(
+    featureId: string,
+    otherFeatureId: string,
+  ): { featureId: string; linkedFeatureId: string } {
+    return featureId < otherFeatureId
+      ? { featureId, linkedFeatureId: otherFeatureId }
+      : { featureId: otherFeatureId, linkedFeatureId: featureId };
   }
 
   private buildSummary(evaluations: TestEvaluation[]): Record<TestEvaluation, number> {

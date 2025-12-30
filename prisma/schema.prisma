@@ -250,13 +250,15 @@ model Feature {
   publishedVersionId String?
   sortOrder          Int              @default(0)
 
-  module           Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
-  versions         FeatureVersion[]
-  issueElements    IssueElement[]
-  testCases        TestCase[]
-  testRuns         TestRun[]
-  lastModifiedBy   User?            @relation("FeatureLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
-  publishedVersion FeatureVersion?  @relation("FeaturePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  module             Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  versions           FeatureVersion[]
+  issueElements      IssueElement[]
+  testCases          TestCase[]
+  testRuns           TestRun[]
+  lastModifiedBy     User?            @relation("FeatureLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
+  publishedVersion   FeatureVersion?  @relation("FeaturePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  linkedFeatures     FeatureLink[]    @relation("FeatureLink_feature")
+  linkedByFeatures   FeatureLink[]    @relation("FeatureLink_linked")
 
   @@unique([moduleId, name])
   @@index([publishedVersionId])
@@ -362,4 +364,19 @@ model TestResult {
 
   @@unique([testRunId, testCaseId])
   @@index([testCaseId])
+}
+
+model FeatureLink {
+  id              String   @id @default(uuid())
+  featureId       String
+  linkedFeatureId String
+  createdAt       DateTime @default(now())
+  reason          String?
+
+  feature       Feature @relation("FeatureLink_feature", fields: [featureId], references: [id], onDelete: Cascade)
+  linkedFeature Feature @relation("FeatureLink_linked", fields: [linkedFeatureId], references: [id], onDelete: Cascade)
+
+  @@unique([featureId, linkedFeatureId])
+  @@index([featureId])
+  @@index([linkedFeatureId])
 }
