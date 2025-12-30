@@ -1,5 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma, TestEvaluation, TestRunStatus } from '@prisma/client';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma, ProjectMemberRole, TestEvaluation, TestRunStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateTestCasesDto } from './dto/create-test-cases.dto';
 import { UpdateTestCaseDto } from './dto/update-test-case.dto';
@@ -147,6 +147,14 @@ type LinkedFeatureSummary = {
   reason: string | null;
 };
 
+type ProjectLabelView = {
+  id: string;
+  name: string;
+  isMandatory: boolean;
+  visibleToRoles: ProjectMemberRole[];
+  readOnlyRoles: ProjectMemberRole[];
+};
+
 type PaginationInput = {
   page: number;
   pageSize: number;
@@ -220,6 +228,81 @@ export class QaService {
       },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  async listProjectLabels(userId: string, projectId: string): Promise<ProjectLabelView[]> {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const labels = await this.prisma.projectLabel.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return labels.map((label) => this.mapProjectLabel(label));
+  }
+
+  async createProjectLabel(
+    userId: string,
+    projectId: string,
+    dto: {
+      name: string;
+      isMandatory?: boolean;
+      visibleToRoles?: ProjectMemberRole[];
+      readOnlyRoles?: ProjectMemberRole[];
+    },
+  ): Promise<ProjectLabelView> {
+    await this.assertProjectOwner(userId, projectId);
+    const created = await this.prisma.projectLabel.create({
+      data: {
+        projectId,
+        name: dto.name.trim(),
+        isMandatory: dto.isMandatory ?? false,
+        visibleToRoles: dto.visibleToRoles ?? [],
+        readOnlyRoles: dto.readOnlyRoles ?? [],
+      },
+    });
+    return this.mapProjectLabel(created);
+  }
+
+  async updateProjectLabel(
+    userId: string,
+    projectId: string,
+    labelId: string,
+    dto: {
+      name?: string;
+      isMandatory?: boolean;
+      visibleToRoles?: ProjectMemberRole[];
+      readOnlyRoles?: ProjectMemberRole[];
+    },
+  ): Promise<ProjectLabelView> {
+    await this.assertProjectOwner(userId, projectId);
+    const label = await this.prisma.projectLabel.findUnique({
+      where: { id: labelId },
+      select: { projectId: true },
+    });
+    if (!label || label.projectId !== projectId) {
+      throw new NotFoundException('Label not found.');
+    }
+    const data: Prisma.ProjectLabelUpdateInput = {};
+    if (dto.name !== undefined) data.name = dto.name.trim();
+    if (dto.isMandatory !== undefined) data.isMandatory = dto.isMandatory;
+    if (dto.visibleToRoles !== undefined) data.visibleToRoles = dto.visibleToRoles;
+    if (dto.readOnlyRoles !== undefined) data.readOnlyRoles = dto.readOnlyRoles;
+    const updated = await this.prisma.projectLabel.update({
+      where: { id: labelId },
+      data,
+    });
+    return this.mapProjectLabel(updated);
+  }
+
+  async deleteProjectLabel(userId: string, projectId: string, labelId: string): Promise<void> {
+    await this.assertProjectOwner(userId, projectId);
+    const label = await this.prisma.projectLabel.findUnique({
+      where: { id: labelId },
+      select: { projectId: true },
+    });
+    if (!label || label.projectId !== projectId) {
+      throw new NotFoundException('Label not found.');
+    }
+    await this.prisma.projectLabel.delete({ where: { id: labelId } });
   }
 
   async listLinkedFeatures(userId: string, featureId: string): Promise<LinkedFeatureSummary[]> {
@@ -1469,5 +1552,36 @@ export class QaService {
       }
       return 0;
     });
+  }
+
+  private async getProjectMemberRole(userId: string, projectId: string): Promise<ProjectMemberRole | null> {
+    const membership = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId, userId } },
+      select: { role: true },
+    });
+    return membership?.role ?? null;
+  }
+
+  private async assertProjectOwner(userId: string, projectId: string): Promise<void> {
+    const role = await this.getProjectMemberRole(userId, projectId);
+    if (role !== ProjectMemberRole.OWNER) {
+      throw new ForbiddenException('Only the project owner can manage labels.');
+    }
+  }
+
+  private mapProjectLabel(label: {
+    id: string;
+    name: string;
+    isMandatory: boolean;
+    visibleToRoles: ProjectMemberRole[];
+    readOnlyRoles: ProjectMemberRole[];
+  }): ProjectLabelView {
+    return {
+      id: label.id,
+      name: label.name,
+      isMandatory: label.isMandatory,
+      visibleToRoles: label.visibleToRoles ?? [],
+      readOnlyRoles: label.readOnlyRoles ?? [],
+    };
   }
 }
