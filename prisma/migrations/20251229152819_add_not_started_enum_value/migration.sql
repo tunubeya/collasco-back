@@ -1,0 +1,1 @@
+ ALTER TYPE "public"."TestEvaluation" ADD VALUE IF NOT EXISTS 'NOT_STARTED';

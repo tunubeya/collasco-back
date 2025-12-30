@@ -155,6 +155,7 @@ type ListQueryOptions = {
 export class QaService {
   private readonly logger = new Logger(QaService.name);
   private static readonly EVALUATIONS: TestEvaluation[] = [
+    TestEvaluation.NOT_STARTED,
     TestEvaluation.NOT_WORKING,
     TestEvaluation.MINOR_ISSUE,
     TestEvaluation.PASSED,
@@ -274,7 +275,7 @@ export class QaService {
         data: results.map((result) => ({
           testRunId: run.id,
           testCaseId: result.testCaseId,
-          evaluation: result.evaluation,
+          evaluation: this.getEvaluationOrDefault(result.evaluation),
           comment: result.comment,
         })),
         skipDuplicates: true,
@@ -331,7 +332,7 @@ export class QaService {
       data: results.map((result) => ({
         testRunId: run.id,
         testCaseId: result.testCaseId,
-        evaluation: result.evaluation,
+        evaluation: this.getEvaluationOrDefault(result.evaluation),
         comment: result.comment,
       })),
       skipDuplicates: true,
@@ -428,8 +429,14 @@ export class QaService {
       }
 
       await this.prisma.$transaction(
-        addOrUpdateResults.map((result) =>
-          this.prisma.testResult.upsert({
+        addOrUpdateResults.map((result) => {
+          const updateData: Prisma.TestResultUpdateInput = {
+            comment: result.comment ?? null,
+          };
+          if (result.evaluation !== undefined) {
+            updateData.evaluation = result.evaluation;
+          }
+          return this.prisma.testResult.upsert({
             where: {
               testRunId_testCaseId: {
                 testRunId: runId,
@@ -439,15 +446,12 @@ export class QaService {
             create: {
               testRunId: runId,
               testCaseId: result.testCaseId,
-              evaluation: result.evaluation,
+              evaluation: this.getEvaluationOrDefault(result.evaluation),
               comment: result.comment ?? null,
             },
-            update: {
-              evaluation: result.evaluation,
-              comment: result.comment ?? null,
-            },
-          }),
-        ),
+            update: updateData,
+          });
+        }),
       );
     }
 
@@ -525,8 +529,14 @@ export class QaService {
     }
 
     await this.prisma.$transaction(
-      dto.results.map((result) =>
-        this.prisma.testResult.upsert({
+      dto.results.map((result) => {
+        const updateData: Prisma.TestResultUpdateInput = {
+          comment: result.comment ?? null,
+        };
+        if (result.evaluation !== undefined) {
+          updateData.evaluation = result.evaluation;
+        }
+        return this.prisma.testResult.upsert({
           where: {
             testRunId_testCaseId: {
               testRunId: runId,
@@ -536,15 +546,12 @@ export class QaService {
           create: {
             testRunId: runId,
             testCaseId: result.testCaseId,
-            evaluation: result.evaluation,
+            evaluation: this.getEvaluationOrDefault(result.evaluation),
             comment: result.comment ?? null,
           },
-          update: {
-            evaluation: result.evaluation,
-            comment: result.comment ?? null,
-          },
-        }),
-      ),
+          update: updateData,
+        });
+      }),
     );
 
     if (run.isTargetScopeCustom) {
@@ -766,7 +773,7 @@ export class QaService {
         for (const evaluation of executedEvaluations.values()) {
           if (evaluation === TestEvaluation.PASSED) {
             passedTestCases += 1;
-          } else {
+          } else if (evaluation !== TestEvaluation.NOT_STARTED) {
             failedTestCases += 1;
           }
         }
@@ -1010,8 +1017,13 @@ export class QaService {
     };
   }
 
+  private getEvaluationOrDefault(evaluation?: TestEvaluation): TestEvaluation {
+    return evaluation ?? TestEvaluation.NOT_STARTED;
+  }
+
   private buildSummary(evaluations: TestEvaluation[]): Record<TestEvaluation, number> {
     const summary: Record<TestEvaluation, number> = {
+      [TestEvaluation.NOT_STARTED]: 0,
       [TestEvaluation.NOT_WORKING]: 0,
       [TestEvaluation.MINOR_ISSUE]: 0,
       [TestEvaluation.PASSED]: 0,

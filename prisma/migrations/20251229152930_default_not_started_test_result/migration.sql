@@ -1,0 +1,1 @@
+ALTER TABLE "public"."TestResult" ALTER COLUMN "evaluation" SET DEFAULT 'NOT_STARTED';

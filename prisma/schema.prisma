@@ -50,6 +50,7 @@ enum ReviewStatus {
 }
 
 enum TestEvaluation {
+  NOT_STARTED
   NOT_WORKING
   MINOR_ISSUE
   PASSED
@@ -352,7 +353,7 @@ model TestResult {
   id         String         @id @default(uuid())
   testRunId  String
   testCaseId String
-  evaluation TestEvaluation
+  evaluation TestEvaluation @default(NOT_STARTED)
   comment    String?
   createdAt  DateTime       @default(now())
 

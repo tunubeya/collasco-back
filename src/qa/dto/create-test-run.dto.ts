@@ -10,14 +10,16 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export class TestResultInput {
   @IsUUID()
   testCaseId!: string;
 
+  @IsOptional()
   @IsEnum(TestEvaluation)
-  evaluation!: TestEvaluation;
+  @Transform(({ value }) => value ?? TestEvaluation.NOT_STARTED)
+  evaluation?: TestEvaluation;
 
   @IsOptional()
   @IsString()
