@@ -81,8 +81,14 @@ type ProjectDashboardMetrics = {
   runsWithFullPass: number;
 };
 
+type MissingDescriptionItem = {
+  id: string;
+  name: string;
+  entityType: 'FEATURE' | 'MODULE';
+};
+
 type ProjectDashboardReports = {
-  featuresMissingDescription: Array<{ id: string; name: string }>;
+  featuresMissingDescription: MissingDescriptionItem[];
   featuresWithoutTestCases: Array<{ id: string; name: string }>;
   featureCoverage: Array<{
     featureId: string;
@@ -669,11 +675,35 @@ export class QaService {
       select: { id: true, name: true, description: true, createdAt: true },
       orderBy: { name: 'asc' },
     });
+    const modules = await this.prisma.module.findMany({
+      where: { projectId },
+      select: { id: true, name: true, description: true, createdAt: true },
+      orderBy: { name: 'asc' },
+    });
     const totalFeatures = features.length;
-    const featuresMissingDescription = features
-      .filter((feature) => !feature.description || feature.description.trim().length === 0)
+    const isMissingDescription = (text?: string | null) => !text || text.trim().length === 0;
+    const missingFeatureDescriptions = features
+      .filter((feature) => isMissingDescription(feature.description))
+      .map((feature) => ({
+        id: feature.id,
+        name: feature.name,
+        createdAt: feature.createdAt,
+        entityType: 'FEATURE' as const,
+      }));
+    const missingModuleDescriptions = modules
+      .filter((module) => isMissingDescription(module.description))
+      .map((module) => ({
+        id: module.id,
+        name: module.name,
+        createdAt: module.createdAt,
+        entityType: 'MODULE' as const,
+      }));
+    const featuresMissingDescription: MissingDescriptionItem[] = [
+      ...missingFeatureDescriptions,
+      ...missingModuleDescriptions,
+    ]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .map((feature) => ({ id: feature.id, name: feature.name }));
+      .map(({ createdAt, ...item }) => item);
     const featureTestCaseCountsRaw = await this.prisma.testCase.groupBy({
       by: ['featureId'],
       where: {
@@ -855,10 +885,15 @@ export class QaService {
     userId: string,
     projectId: string,
     options: ListQueryOptions,
-  ): Promise<PaginatedResult<{ id: string; name: string }>> {
+  ): Promise<PaginatedResult<MissingDescriptionItem>> {
     await assertProjectRead(this.prisma, userId, projectId);
     const data = await this.buildProjectDashboardData(projectId);
-    return this.paginateArray(data.reports.featuresMissingDescription, options.pagination);
+    const requestedType = options.filters?.type?.toUpperCase();
+    const filterType = requestedType === 'FEATURE' || requestedType === 'MODULE' ? requestedType : null;
+    const items = filterType
+      ? data.reports.featuresMissingDescription.filter((item) => item.entityType === filterType)
+      : data.reports.featuresMissingDescription;
+    return this.paginateArray(items, options.pagination);
   }
 
   async getProjectDashboardFeaturesWithoutTestCases(
