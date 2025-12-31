@@ -1,5 +1,11 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma, ProjectMemberRole, TestEvaluation, TestRunStatus } from '@prisma/client';
+import {
+  DocumentationEntityType,
+  Prisma,
+  ProjectMemberRole,
+  TestEvaluation,
+  TestRunStatus,
+} from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateTestCasesDto } from './dto/create-test-cases.dto';
 import { UpdateTestCaseDto } from './dto/update-test-case.dto';
@@ -155,6 +161,19 @@ type ProjectLabelView = {
   readOnlyRoles: ProjectMemberRole[];
 };
 
+type DocumentationEntry = {
+  label: ProjectLabelView;
+  field:
+    | {
+        id: string;
+        content: string | null;
+        isNotApplicable: boolean;
+        updatedAt: Date;
+      }
+    | null;
+  canEdit: boolean;
+};
+
 type PaginationInput = {
   page: number;
   pageSize: number;
@@ -182,6 +201,11 @@ export class QaService {
     TestEvaluation.MINOR_ISSUE,
     TestEvaluation.PASSED,
   ];
+  private static readonly WRITE_ROLES = new Set<ProjectMemberRole>([
+    ProjectMemberRole.OWNER,
+    ProjectMemberRole.MAINTAINER,
+    ProjectMemberRole.DEVELOPER,
+  ]);
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -303,6 +327,66 @@ export class QaService {
       throw new NotFoundException('Label not found.');
     }
     await this.prisma.projectLabel.delete({ where: { id: labelId } });
+  }
+
+  async listFeatureDocumentation(userId: string, featureId: string): Promise<DocumentationEntry[]> {
+    const projectId = await this.getProjectIdOrThrow(featureId);
+    await assertProjectRead(this.prisma, userId, projectId);
+    return this.listDocumentationEntries({
+      userId,
+      projectId,
+      entityType: DocumentationEntityType.FEATURE,
+      entityId: featureId,
+    });
+  }
+
+  async listModuleDocumentation(userId: string, moduleId: string): Promise<DocumentationEntry[]> {
+    const projectId = await this.getProjectIdByModuleOrThrow(moduleId);
+    await assertProjectRead(this.prisma, userId, projectId);
+    return this.listDocumentationEntries({
+      userId,
+      projectId,
+      entityType: DocumentationEntityType.MODULE,
+      entityId: moduleId,
+    });
+  }
+
+  async upsertFeatureDocumentation(
+    userId: string,
+    featureId: string,
+    labelId: string,
+    dto: { content?: string; isNotApplicable?: boolean },
+  ): Promise<DocumentationEntry[]> {
+    const projectId = await this.getProjectIdOrThrow(featureId);
+    await assertProjectWrite(this.prisma, userId, projectId);
+    await this.upsertDocumentationField({
+      userId,
+      projectId,
+      entityType: DocumentationEntityType.FEATURE,
+      entityId: featureId,
+      labelId,
+      dto,
+    });
+    return this.listFeatureDocumentation(userId, featureId);
+  }
+
+  async upsertModuleDocumentation(
+    userId: string,
+    moduleId: string,
+    labelId: string,
+    dto: { content?: string; isNotApplicable?: boolean },
+  ): Promise<DocumentationEntry[]> {
+    const projectId = await this.getProjectIdByModuleOrThrow(moduleId);
+    await assertProjectWrite(this.prisma, userId, projectId);
+    await this.upsertDocumentationField({
+      userId,
+      projectId,
+      entityType: DocumentationEntityType.MODULE,
+      entityId: moduleId,
+      labelId,
+      dto,
+    });
+    return this.listModuleDocumentation(userId, moduleId);
   }
 
   async listLinkedFeatures(userId: string, featureId: string): Promise<LinkedFeatureSummary[]> {
@@ -1392,6 +1476,22 @@ export class QaService {
     return projectId;
   }
 
+  private async getProjectIdByModule(moduleId: string): Promise<string | null> {
+    const module = await this.prisma.module.findUnique({
+      where: { id: moduleId },
+      select: { projectId: true },
+    });
+    return module?.projectId ?? null;
+  }
+
+  private async getProjectIdByModuleOrThrow(moduleId: string): Promise<string> {
+    const projectId = await this.getProjectIdByModule(moduleId);
+    if (!projectId) {
+      throw new NotFoundException('Module not found.');
+    }
+    return projectId;
+  }
+
   private async getTestRunDetail(runId: string): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
@@ -1583,5 +1683,148 @@ export class QaService {
       visibleToRoles: label.visibleToRoles ?? [],
       readOnlyRoles: label.readOnlyRoles ?? [],
     };
+  }
+
+  private canViewLabel(role: ProjectMemberRole, label: ProjectLabelView): boolean {
+    if (role === ProjectMemberRole.OWNER) {
+      return true;
+    }
+    if (!label.visibleToRoles || label.visibleToRoles.length === 0) {
+      return true;
+    }
+    return label.visibleToRoles.includes(role);
+  }
+
+  private canEditLabel(role: ProjectMemberRole, label: ProjectLabelView): boolean {
+    if (!this.canViewLabel(role, label)) {
+      return false;
+    }
+    if (!QaService.WRITE_ROLES.has(role)) {
+      return false;
+    }
+    if (role === ProjectMemberRole.OWNER) {
+      return true;
+    }
+    return !label.readOnlyRoles.includes(role);
+  }
+
+  private async listDocumentationEntries(params: {
+    userId: string;
+    projectId: string;
+    entityType: DocumentationEntityType;
+    entityId: string;
+  }): Promise<DocumentationEntry[]> {
+    const { userId, projectId, entityType, entityId } = params;
+    const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const labels = await this.prisma.projectLabel.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+    });
+    const labelViews = labels.map((label) => this.mapProjectLabel(label));
+    const records = await this.prisma.documentationField.findMany({
+      where: {
+        projectId,
+        entityType,
+        featureId: entityType === DocumentationEntityType.FEATURE ? entityId : undefined,
+        moduleId: entityType === DocumentationEntityType.MODULE ? entityId : undefined,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const recordMap = new Map(records.map((record) => [record.labelId, record]));
+
+    return labelViews
+      .filter((label) => this.canViewLabel(role, label))
+      .map((label) => {
+        const record = recordMap.get(label.id);
+        return {
+          label,
+          field: record
+            ? {
+                id: record.id,
+                content: record.content ?? null,
+                isNotApplicable: record.isNotApplicable,
+                updatedAt: record.updatedAt,
+              }
+            : null,
+          canEdit: this.canEditLabel(role, label),
+        };
+      });
+  }
+
+  private async upsertDocumentationField(params: {
+    userId: string;
+    projectId: string;
+    entityType: DocumentationEntityType;
+    entityId: string;
+    labelId: string;
+    dto: { content?: string; isNotApplicable?: boolean };
+  }): Promise<void> {
+    const { userId, projectId, entityType, entityId, labelId, dto } = params;
+    const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const label = await this.prisma.projectLabel.findUnique({
+      where: { id: labelId },
+    });
+    if (!label || label.projectId !== projectId) {
+      throw new BadRequestException('Label not found for this project.');
+    }
+    const labelView = this.mapProjectLabel(label);
+    if (!this.canViewLabel(role, labelView)) {
+      throw new ForbiddenException('You cannot use this label.');
+    }
+    if (!this.canEditLabel(role, labelView)) {
+      throw new ForbiddenException('You do not have permission to edit this label.');
+    }
+
+    const existing = await this.prisma.documentationField.findFirst({
+      where: {
+        projectId,
+        entityType,
+        labelId,
+        featureId: entityType === DocumentationEntityType.FEATURE ? entityId : null,
+        moduleId: entityType === DocumentationEntityType.MODULE ? entityId : null,
+      },
+    });
+
+    if (existing) {
+      const data: Prisma.DocumentationFieldUpdateInput = {};
+      if (dto.content !== undefined) {
+        data.content = dto.content;
+      }
+      if (dto.isNotApplicable !== undefined) {
+        data.isNotApplicable = dto.isNotApplicable;
+      }
+      if (Object.keys(data).length === 0) {
+        throw new BadRequestException('Nothing to update.');
+      }
+      await this.prisma.documentationField.update({
+        where: { id: existing.id },
+        data,
+      });
+      return;
+    }
+
+    if (dto.content === undefined && dto.isNotApplicable === undefined) {
+      throw new BadRequestException('Provide content or mark the label as not applicable.');
+    }
+
+    await this.prisma.documentationField.create({
+      data: {
+        projectId,
+        entityType,
+        featureId: entityType === DocumentationEntityType.FEATURE ? entityId : null,
+        moduleId: entityType === DocumentationEntityType.MODULE ? entityId : null,
+        labelId,
+        content: dto.content ?? null,
+        isNotApplicable: dto.isNotApplicable ?? false,
+      },
+    });
+  }
+
+  private async getProjectMemberRoleOrThrow(userId: string, projectId: string): Promise<ProjectMemberRole> {
+    const role = await this.getProjectMemberRole(userId, projectId);
+    if (!role) {
+      throw new ForbiddenException('Access denied for project.');
+    }
+    return role;
   }
 }

@@ -61,6 +61,11 @@ enum TestRunStatus {
   CLOSED
 }
 
+enum DocumentationEntityType {
+  FEATURE
+  MODULE
+}
+
 model User {
   id               String             @id @default(uuid())
   email            String             @unique
@@ -150,6 +155,7 @@ model Project {
   modules          Module[]
   testRuns         TestRun[]
   labels           ProjectLabel[]
+  documentationEntries DocumentationField[]
 
   @@unique([ownerId, slug])
   @@index([ownerId])
@@ -197,13 +203,14 @@ model Module {
   lastModifiedById   String?
   publishedVersionId String?
 
-  project          Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  parent           Module?         @relation("ModuleChildren", fields: [parentModuleId], references: [id], onDelete: SetNull)
-  children         Module[]        @relation("ModuleChildren")
-  features         Feature[]
-  versions         ModuleVersion[]
-  lastModifiedBy   User?           @relation("ModuleLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
-  publishedVersion ModuleVersion?  @relation("ModulePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  project             Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent              Module?            @relation("ModuleChildren", fields: [parentModuleId], references: [id], onDelete: SetNull)
+  children            Module[]           @relation("ModuleChildren")
+  features            Feature[]
+  versions            ModuleVersion[]
+  lastModifiedBy      User?              @relation("ModuleLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
+  publishedVersion    ModuleVersion?     @relation("ModulePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  documentationFields DocumentationField[] @relation("ModuleDocumentation")
 
   @@unique([projectId, parentModuleId, name])
   @@index([publishedVersionId])
@@ -260,6 +267,7 @@ model Feature {
   publishedVersion   FeatureVersion?  @relation("FeaturePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
   linkedFeatures     FeatureLink[]    @relation("FeatureLink_feature")
   linkedByFeatures   FeatureLink[]    @relation("FeatureLink_linked")
+  documentationFields DocumentationField[] @relation("FeatureDocumentation")
 
   @@unique([moduleId, name])
   @@index([publishedVersionId])
@@ -392,8 +400,33 @@ model ProjectLabel {
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project             Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documentationFields DocumentationField[]
 
   @@unique([projectId, name])
+  @@index([projectId])
+}
+
+model DocumentationField {
+  id              String                   @id @default(uuid())
+  projectId       String
+  entityType      DocumentationEntityType
+  featureId       String?
+  moduleId        String?
+  labelId         String
+  content         String?
+  isNotApplicable Boolean                  @default(false)
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  feature Feature? @relation("FeatureDocumentation", fields: [featureId], references: [id], onDelete: Cascade)
+  module  Module?  @relation("ModuleDocumentation", fields: [moduleId], references: [id], onDelete: Cascade)
+  label   ProjectLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, entityType, featureId, moduleId, labelId])
+  @@index([labelId])
+  @@index([featureId])
+  @@index([moduleId])
   @@index([projectId])
 }
