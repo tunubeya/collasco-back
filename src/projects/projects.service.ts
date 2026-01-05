@@ -14,30 +14,38 @@ import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
 import { parseRepoUrl } from 'src/github/utils/parse-repo-url';
 import type { ListIssuesDto, ListPullsDto } from 'src/github/dto/list.dto';
 import { GithubService } from 'src/github/github.service';
-import { ProjectMemberRole, Visibility } from '@prisma/client';
+import { DocumentationEntityType, ProjectMemberRole, Visibility } from '@prisma/client';
+
+type DocumentationLabelSummary = {
+  labelId: string;
+  labelName: string;
+  content: string | null;
+  isNotApplicable: boolean;
+  updatedAt: Date;
+};
 
 type ModuleRow = {
   id: string;
   projectId: string;
   parentModuleId: string | null;
   name: string;
-  description: string | null;
   isRoot: boolean;
   sortOrder: number;
   createdAt: Date;
   publishedVersionId: string | null;
+  documentationLabels: DocumentationLabelSummary[];
 };
 
 type FeatureRow = {
   id: string;
   moduleId: string;
   name: string;
-  description: string | null;
   status: import('@prisma/client').FeatureStatus | null;
   priority: import('@prisma/client').FeaturePriority | null;
   sortOrder: number;
   createdAt: Date;
   publishedVersionId: string | null;
+  documentationLabels: DocumentationLabelSummary[];
 };
 
 type TreeFeatureNode = {
@@ -45,26 +53,26 @@ type TreeFeatureNode = {
   id: string;
   moduleId: string;
   name: string;
-  description: string | null;
   status: import('@prisma/client').FeatureStatus | null;
   priority: import('@prisma/client').FeaturePriority | null;
   sortOrder: number | null;
   order: number;
   createdAt: Date;
   publishedVersionId: string | null;
+  documentationLabels: DocumentationLabelSummary[];
 };
 
 export type TreeModuleNode = {
   type: 'module';
   id: string;
   name: string;
-  description: string | null;
   parentModuleId: string | null;
   isRoot: boolean;
   sortOrder: number | null;
   order: number;
   createdAt: Date;
   publishedVersionId: string | null;
+  documentationLabels: DocumentationLabelSummary[];
   items: TreeNode[];
 };
 
@@ -79,6 +87,30 @@ export class ProjectsService {
     private readonly prisma: PrismaService,
     private readonly gh: GithubService,
   ) {}
+
+  private async resolveProjectRole(userId: string, project: { id: string; ownerId: string }) {
+    if (project.ownerId === userId) {
+      return ProjectMemberRole.OWNER;
+    }
+    const membership = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId: project.id, userId } },
+      select: { role: true },
+    });
+    return membership?.role ?? ProjectMemberRole.VIEWER;
+  }
+
+  private canViewDocumentationLabel(
+    role: ProjectMemberRole,
+    visibleToRoles?: ProjectMemberRole[] | null,
+  ): boolean {
+    if (role === ProjectMemberRole.OWNER) {
+      return true;
+    }
+    if (!visibleToRoles || visibleToRoles.length === 0) {
+      return true;
+    }
+    return visibleToRoles.includes(role);
+  }
 
   private compareModules(a: ModuleRow, b: ModuleRow) {
     const orderA = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
@@ -144,13 +176,13 @@ export class ProjectsService {
           id: feat.id,
           moduleId: feat.moduleId,
           name: feat.name,
-          description: feat.description,
           status: feat.status,
           priority: feat.priority,
           sortOrder: feat.sortOrder ?? null,
           order: index + 1,
           createdAt: feat.createdAt,
           publishedVersionId: feat.publishedVersionId,
+          documentationLabels: feat.documentationLabels,
         };
       });
 
@@ -158,13 +190,13 @@ export class ProjectsService {
         type: 'module',
         id: mod.id,
         name: mod.name,
-        description: mod.description,
         parentModuleId: mod.parentModuleId,
         isRoot: mod.isRoot,
         sortOrder: mod.sortOrder ?? null,
         order: 0,
         createdAt: mod.createdAt,
         publishedVersionId: mod.publishedVersionId,
+        documentationLabels: mod.documentationLabels,
         items,
       };
     };
@@ -311,14 +343,13 @@ export class ProjectsService {
 
     const projectIds = projects.map((p) => p.id);
 
-    const [modules, features] = await this.prisma.$transaction([
+    const [rawModules, rawFeatures] = await this.prisma.$transaction([
       this.prisma.module.findMany({
         where: { projectId: { in: projectIds } },
         select: {
           id: true,
           projectId: true,
           name: true,
-          description: true,
           parentModuleId: true,
           isRoot: true,
           sortOrder: true,
@@ -332,7 +363,6 @@ export class ProjectsService {
           id: true,
           moduleId: true,
           name: true,
-          description: true,
           status: true,
           priority: true,
           sortOrder: true,
@@ -341,6 +371,15 @@ export class ProjectsService {
         },
       }),
     ]);
+
+    const modules: ModuleRow[] = rawModules.map((mod) => ({
+      ...mod,
+      documentationLabels: [],
+    }));
+    const features: FeatureRow[] = rawFeatures.map((feat) => ({
+      ...feat,
+      documentationLabels: [],
+    }));
 
     const trees = this.buildTreesByProject(modules, features);
     const items = projects.map((project) => ({
@@ -381,15 +420,15 @@ export class ProjectsService {
 
   async getStructure(user: AccessTokenPayload, projectId: string) {
     const project = await this.ensureCanRead(user, projectId);
+    const viewerRole = await this.resolveProjectRole(user.sub, project);
 
-    const [modules, features] = await this.prisma.$transaction([
+    const [rawModules, rawFeatures, labels, documentationFields] = await this.prisma.$transaction([
       this.prisma.module.findMany({
         where: { projectId },
         select: {
           id: true,
           projectId: true,
           name: true,
-          description: true,
           parentModuleId: true,
           isRoot: true,
           sortOrder: true,
@@ -403,7 +442,6 @@ export class ProjectsService {
           id: true,
           moduleId: true,
           name: true,
-          description: true,
           status: true,
           priority: true,
           sortOrder: true,
@@ -411,7 +449,71 @@ export class ProjectsService {
           publishedVersionId: true,
         },
       }),
+      this.prisma.projectLabel.findMany({
+        where: { projectId },
+        select: {
+          id: true,
+          name: true,
+          visibleToRoles: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.documentationField.findMany({
+        where: {
+          projectId,
+          entityType: { in: [DocumentationEntityType.MODULE, DocumentationEntityType.FEATURE] },
+        },
+        select: {
+          labelId: true,
+          entityType: true,
+          moduleId: true,
+          featureId: true,
+          content: true,
+          isNotApplicable: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
     ]);
+
+    const visibleLabelMap = new Map(
+      labels
+        .filter((label) => this.canViewDocumentationLabel(viewerRole, label.visibleToRoles ?? []))
+        .map((label) => [label.id, label.name]),
+    );
+
+    const moduleDocs = new Map<string, DocumentationLabelSummary[]>();
+    const featureDocs = new Map<string, DocumentationLabelSummary[]>();
+
+    for (const record of documentationFields) {
+      const labelName = visibleLabelMap.get(record.labelId);
+      if (!labelName) continue;
+      const summary: DocumentationLabelSummary = {
+        labelId: record.labelId,
+        labelName,
+        content: record.content ?? null,
+        isNotApplicable: record.isNotApplicable,
+        updatedAt: record.updatedAt,
+      };
+      if (record.entityType === DocumentationEntityType.MODULE && record.moduleId) {
+        const list = moduleDocs.get(record.moduleId) ?? [];
+        list.push(summary);
+        moduleDocs.set(record.moduleId, list);
+      } else if (record.entityType === DocumentationEntityType.FEATURE && record.featureId) {
+        const list = featureDocs.get(record.featureId) ?? [];
+        list.push(summary);
+        featureDocs.set(record.featureId, list);
+      }
+    }
+
+    const modules: ModuleRow[] = rawModules.map((mod) => ({
+      ...mod,
+      documentationLabels: moduleDocs.get(mod.id) ?? [],
+    }));
+    const features: FeatureRow[] = rawFeatures.map((feat) => ({
+      ...feat,
+      documentationLabels: featureDocs.get(feat.id) ?? [],
+    }));
 
     const modulesTree = this.buildModuleTree(modules, features);
 
