@@ -471,12 +471,13 @@ export class ProjectsService {
     const project = await this.ensureCanRead(user, projectId);
     const viewerRole = await this.resolveProjectRole(user.sub, project);
 
-    const [rawModules, rawFeatures, labels, documentationFields] = await this.prisma.$transaction([
-      this.prisma.module.findMany({
-        where: { projectId },
-        select: {
-          id: true,
-          projectId: true,
+    const [rawModules, rawFeatures, labels, documentationFields, preference] =
+      await this.prisma.$transaction([
+        this.prisma.module.findMany({
+          where: { projectId },
+          select: {
+            id: true,
+            projectId: true,
           name: true,
           parentModuleId: true,
           isRoot: true,
@@ -509,11 +510,11 @@ export class ProjectsService {
         },
         orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
       }),
-      this.prisma.documentationField.findMany({
-        where: {
-          projectId,
-          entityType: { in: [DocumentationEntityType.MODULE, DocumentationEntityType.FEATURE] },
-        },
+        this.prisma.documentationField.findMany({
+          where: {
+            projectId,
+            entityType: { in: [DocumentationEntityType.MODULE, DocumentationEntityType.FEATURE] },
+          },
         select: {
           labelId: true,
           entityType: true,
@@ -524,8 +525,12 @@ export class ProjectsService {
           updatedAt: true,
         },
         orderBy: { createdAt: 'asc' },
-      }),
-    ]);
+        }),
+        this.prisma.userProjectPreference.findUnique({
+          where: { userId_projectId: { projectId, userId: user.sub } },
+          select: { documentationLabelIds: true },
+        }),
+      ]);
 
     const visibleLabels = this.filterVisibleLabels(
       labels.map((label) => ({
@@ -539,12 +544,20 @@ export class ProjectsService {
     );
 const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]));
 
+    const preferredOrder = (preference?.documentationLabelIds ?? []).filter((id) =>
+      visibleLabelMap.has(id),
+    );
+    const preferredSet = new Set(preferredOrder);
+    const preferCustomOrder = preferredOrder.length > 0;
+    const preferredOrderMap = new Map(preferredOrder.map((id, index) => [id, index]));
+
     const moduleDocs = new Map<string, DocumentationLabelSummary[]>();
     const featureDocs = new Map<string, DocumentationLabelSummary[]>();
 
     for (const record of documentationFields) {
       const labelInfo = visibleLabelMap.get(record.labelId);
       if (!labelInfo) continue;
+      if (preferCustomOrder && !preferredSet.has(record.labelId)) continue;
       const summary: DocumentationLabelSummary = {
         labelId: record.labelId,
         labelName: labelInfo.name,
@@ -568,10 +581,15 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
     const sortDocumentation = (docs: DocumentationLabelSummary[]) =>
       docs
         .slice()
-        .sort(
-          (a, b) =>
-            a.displayOrder - b.displayOrder || a.labelName.localeCompare(b.labelName),
-        );
+        .sort((a, b) => {
+          if (preferCustomOrder) {
+            const orderA = preferredOrderMap.get(a.labelId) ?? Number.MAX_SAFE_INTEGER;
+            const orderB = preferredOrderMap.get(b.labelId) ?? Number.MAX_SAFE_INTEGER;
+            if (orderA !== orderB) return orderA - orderB;
+          }
+          if (a.displayOrder !== b.displayOrder) return a.displayOrder - b.displayOrder;
+          return a.labelName.localeCompare(b.labelName);
+        });
 
     const modules: ModuleRow[] = rawModules.map((mod) => ({
       ...mod,
