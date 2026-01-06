@@ -175,9 +175,7 @@ export class QaController {
     @Param('projectId', ParseUUIDPipe) projectId: string,
   ) {
     const userId = this.resolveUserId(user);
-    let a = await this.qaService.getProjectDashboard(userId, projectId);
-    console.log('Dashboard:', a);
-    return a
+    return this.qaService.getProjectDashboard(userId, projectId);
   }
 
   @Get('projects/:projectId/dashboard/features-missing-description')
@@ -188,9 +186,7 @@ export class QaController {
   ) {
     const userId = this.resolveUserId(user);
     const options = this.resolveListQuery(query);
-    let a = await this.qaService.getProjectDashboardFeaturesMissingDescription(userId, projectId, options);
-    console.log('missing descroiptions:', a);
-    return a
+    return this.qaService.getProjectDashboardFeaturesMissingDescription(userId, projectId, options);
   }
 
   @Get('projects/:projectId/dashboard/features-without-testcases')
@@ -201,9 +197,8 @@ export class QaController {
   ) {
     const userId = this.resolveUserId(user);
     const options = this.resolveListQuery(query);
-    let a=await this.qaService.getProjectDashboardFeaturesWithoutTestCases(userId, projectId, options);
-    console.log('feat without testcases:', a);
-    return a
+    return this.qaService.getProjectDashboardFeaturesWithoutTestCases(userId, projectId, options);
+
   }
 
   @Get('projects/:projectId/dashboard/feature-coverage')
@@ -214,9 +209,8 @@ export class QaController {
   ) {
     const userId = this.resolveUserId(user);
     const options = this.resolveListQuery(query);
-    let a= await this.qaService.getProjectDashboardFeatureCoverage(userId, projectId, options);
-    console.log('Coverage:',a);
-    return a
+    return this.qaService.getProjectDashboardFeatureCoverage(userId, projectId, options);
+
   }
 
   @Get('projects/:projectId/dashboard/feature-health')
@@ -227,9 +221,7 @@ export class QaController {
   ) {
     const userId = this.resolveUserId(user);
     const options = this.resolveListQuery(query);
-    let a = await this.qaService.getProjectDashboardFeatureHealth(userId, projectId, options);
-    console.log('Health:',a);
-    return a
+    return this.qaService.getProjectDashboardFeatureHealth(userId, projectId, options);
   }
 
   @Get('projects/:projectId/dashboard/open-runs')
@@ -240,9 +232,7 @@ export class QaController {
   ) {
     const userId = this.resolveUserId(user);
     const options = this.resolveListQuery(query);
-    let a= await this.qaService.getProjectDashboardOpenRuns(userId, projectId, options);
-    console.log('open runs:', a);
-    return a
+    return this.qaService.getProjectDashboardOpenRuns(userId, projectId, options);
   }
 
   @Get('projects/:projectId/dashboard/runs-with-full-pass')
@@ -253,9 +243,7 @@ export class QaController {
   ) {
     const userId = this.resolveUserId(user);
     const options = this.resolveListQuery(query);
-    let a= await this.qaService.getProjectDashboardRunsWithFullPass(userId, projectId, options);
-    console.log('runs will full pass:', a);
-    return a
+    return this.qaService.getProjectDashboardRunsWithFullPass(userId, projectId, options);
   }
 
   @Get('features/:featureId/test-health')
@@ -264,9 +252,7 @@ export class QaController {
     @Param('featureId', ParseUUIDPipe) featureId: string,
   ) {
     const userId = this.resolveUserId(user);
-    let a= await this.qaService.getTestHealth(userId, featureId);
-    console.log('Single Test Health:', a);
-    return a;
+    return this.qaService.getTestHealth(userId, featureId);
   }
 
   private resolveUserId(user: AccessTokenPayload | undefined): string {
