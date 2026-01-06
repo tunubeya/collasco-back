@@ -65,6 +65,66 @@ GET /projects/:id/github/pulls — Pull Requests del repo vinculado. · JWT · Q
 
 # DELETE /projects/:id/github/credential — Borra credencial de proyecto. · JWT
 
+GET /projects/:id/structure — Devuelve el árbol completo (módulos + features) usado por el manual del proyecto. · JWT · Query: { page?, limit?, sort?, q? }
+
+Respuesta:
+```json
+{
+  "projectId": "uuid",
+  "description": "Descripción del proyecto",
+  "modules": [
+    {
+      "type": "module",
+      "id": "uuid",
+      "name": "Módulo raíz",
+      "parentModuleId": null,
+      "items": [
+        {
+          "type": "feature",
+          "id": "uuid",
+          "name": "Feature A",
+          "documentationLabels": [
+            {
+              "labelId": "uuid",
+              "labelName": "Manual",
+              "content": "Texto redactado en QA",
+              "isMandatory": true,
+              "displayOrder": 1,
+              "isNotApplicable": false,
+              "updatedAt": "2024-06-01T00:00:00.000Z"
+            }
+          ]
+        }
+      ],
+      "documentationLabels": [
+        {
+          "labelId": "uuid",
+          "labelName": "Manual",
+          "content": "Texto del módulo",
+          "isMandatory": true,
+          "displayOrder": 1,
+          "isNotApplicable": false,
+          "updatedAt": "2024-06-01T00:00:00.000Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Notas:
+- Ya no se exponen `description` en los nodos. Toda la información proviene de `documentationLabels`, restringida según el rol del usuario.
+- Cada entrada de `documentationLabels` incluye `isMandatory` y se ordena usando la prioridad (`displayOrder`) definida en los labels del proyecto.
+- Cuando un módulo o feature no tiene documentación, `documentationLabels` será un arreglo vacío.
+
+GET /projects/:id/documentation/labels — Lista las etiquetas de documentación visibles para el usuario autenticado. · JWT
+
+GET /projects/:id/documentation/label-preferences — Devuelve los labels disponibles + la selección guardada (selectedLabelIds). · JWT
+
+PUT /projects/:id/documentation/label-preferences — Reemplaza la selección de labels visibles para el usuario. · JWT · Body: { "labelIds": ["label-uuid", ...] }
+
+PATCH /qa/projects/:projectId/labels/:labelId/order — Solo owner. Mueve el label a un índice específico (0-based). · JWT · Body: { "newIndex": 0 }
+
 GitHub (cuenta del usuario)
 
 GET /github/whoami — Whoami usando token global (o ninguno). · Public

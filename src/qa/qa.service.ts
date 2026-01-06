@@ -159,6 +159,7 @@ type ProjectLabelView = {
   isMandatory: boolean;
   visibleToRoles: ProjectMemberRole[];
   readOnlyRoles: ProjectMemberRole[];
+  displayOrder: number;
 };
 
 type DocumentationEntry = {
@@ -258,7 +259,7 @@ export class QaService {
     await assertProjectRead(this.prisma, userId, projectId);
     const labels = await this.prisma.projectLabel.findMany({
       where: { projectId },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
     });
     return labels.map((label) => this.mapProjectLabel(label));
   }
@@ -274,11 +275,18 @@ export class QaService {
     },
   ): Promise<ProjectLabelView> {
     await this.assertProjectOwner(userId, projectId);
+    const lastLabel = await this.prisma.projectLabel.findFirst({
+      where: { projectId },
+      orderBy: { displayOrder: 'desc' },
+      select: { displayOrder: true },
+    });
+    const nextOrder = (lastLabel?.displayOrder ?? 0) + 1;
     const created = await this.prisma.projectLabel.create({
       data: {
         projectId,
         name: dto.name.trim(),
         isMandatory: dto.isMandatory ?? false,
+        displayOrder: nextOrder,
         visibleToRoles: dto.visibleToRoles ?? [],
         readOnlyRoles: dto.readOnlyRoles ?? [],
       },
@@ -327,6 +335,37 @@ export class QaService {
       throw new NotFoundException('Label not found.');
     }
     await this.prisma.projectLabel.delete({ where: { id: labelId } });
+  }
+
+  async reorderProjectLabel(userId: string, projectId: string, labelId: string, newIndex: number): Promise<ProjectLabelView[]> {
+    await this.assertProjectOwner(userId, projectId);
+    const labels = await this.prisma.projectLabel.findMany({
+      where: { projectId },
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true },
+    });
+    const currentIndex = labels.findIndex((label) => label.id === labelId);
+    if (currentIndex === -1) {
+      throw new NotFoundException('Label not found.');
+    }
+    const clampedIndex = Math.max(0, Math.min(newIndex, labels.length - 1));
+    const [label] = labels.splice(currentIndex, 1);
+    labels.splice(clampedIndex, 0, label);
+
+    await this.prisma.$transaction(
+      labels.map((entry, index) =>
+        this.prisma.projectLabel.update({
+          where: { id: entry.id },
+          data: { displayOrder: index },
+        }),
+      ),
+    );
+
+    const reordered = await this.prisma.projectLabel.findMany({
+      where: { projectId },
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    return reordered.map((labelRow) => this.mapProjectLabel(labelRow));
   }
 
   async listFeatureDocumentation(userId: string, featureId: string): Promise<DocumentationEntry[]> {
@@ -1675,6 +1714,7 @@ export class QaService {
     isMandatory: boolean;
     visibleToRoles: ProjectMemberRole[];
     readOnlyRoles: ProjectMemberRole[];
+    displayOrder: number;
   }): ProjectLabelView {
     return {
       id: label.id,
@@ -1682,6 +1722,7 @@ export class QaService {
       isMandatory: label.isMandatory,
       visibleToRoles: label.visibleToRoles ?? [],
       readOnlyRoles: label.readOnlyRoles ?? [],
+      displayOrder: label.displayOrder ?? 0,
     };
   }
 

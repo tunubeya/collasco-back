@@ -16,9 +16,18 @@ import type { ListIssuesDto, ListPullsDto } from 'src/github/dto/list.dto';
 import { GithubService } from 'src/github/github.service';
 import { DocumentationEntityType, ProjectMemberRole, Visibility } from '@prisma/client';
 
+export type VisibleDocumentationLabel = {
+  id: string;
+  name: string;
+  isMandatory: boolean;
+  order: number;
+};
+
 type DocumentationLabelSummary = {
   labelId: string;
   labelName: string;
+  isMandatory: boolean;
+  displayOrder: number;
   content: string | null;
   isNotApplicable: boolean;
   updatedAt: Date;
@@ -80,6 +89,11 @@ type TreeNode = TreeModuleNode | TreeFeatureNode;
 export type ProjectStructureFeatureNode = TreeFeatureNode;
 export type ProjectStructureModuleNode = TreeModuleNode;
 export type ProjectStructureNode = TreeNode;
+export type DocumentationLabelPreferencePayload = {
+  projectId: string;
+  availableLabels: VisibleDocumentationLabel[];
+  selectedLabelIds: string[];
+};
 
 @Injectable()
 export class ProjectsService {
@@ -110,6 +124,41 @@ export class ProjectsService {
       return true;
     }
     return visibleToRoles.includes(role);
+  }
+
+  private filterVisibleLabels(
+    labels: Array<{
+      id: string;
+      name: string;
+      isMandatory: boolean;
+      visibleToRoles: ProjectMemberRole[] | null;
+      displayOrder: number;
+    }>,
+    role: ProjectMemberRole,
+  ): VisibleDocumentationLabel[] {
+    return labels
+      .filter((label) => this.canViewDocumentationLabel(role, label.visibleToRoles ?? []))
+      .map((label) => ({
+        id: label.id,
+        name: label.name,
+        isMandatory: label.isMandatory,
+        order: label.displayOrder ?? 0,
+      }));
+  }
+
+  private async loadVisibleLabelsForRole(projectId: string, role: ProjectMemberRole) {
+    const labels = await this.prisma.projectLabel.findMany({
+      where: { projectId },
+      select: {
+        id: true,
+        name: true,
+        isMandatory: true,
+        displayOrder: true,
+        visibleToRoles: true,
+      },
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    return this.filterVisibleLabels(labels, role);
   }
 
   private compareModules(a: ModuleRow, b: ModuleRow) {
@@ -454,9 +503,11 @@ export class ProjectsService {
         select: {
           id: true,
           name: true,
+          isMandatory: true,
+          displayOrder: true,
           visibleToRoles: true,
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
       }),
       this.prisma.documentationField.findMany({
         where: {
@@ -476,21 +527,29 @@ export class ProjectsService {
       }),
     ]);
 
-    const visibleLabelMap = new Map(
-      labels
-        .filter((label) => this.canViewDocumentationLabel(viewerRole, label.visibleToRoles ?? []))
-        .map((label) => [label.id, label.name]),
+    const visibleLabels = this.filterVisibleLabels(
+      labels.map((label) => ({
+        id: label.id,
+        name: label.name,
+        isMandatory: label.isMandatory,
+        displayOrder: label.displayOrder ?? 0,
+        visibleToRoles: label.visibleToRoles ?? [],
+      })),
+      viewerRole,
     );
+const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]));
 
     const moduleDocs = new Map<string, DocumentationLabelSummary[]>();
     const featureDocs = new Map<string, DocumentationLabelSummary[]>();
 
     for (const record of documentationFields) {
-      const labelName = visibleLabelMap.get(record.labelId);
-      if (!labelName) continue;
+      const labelInfo = visibleLabelMap.get(record.labelId);
+      if (!labelInfo) continue;
       const summary: DocumentationLabelSummary = {
         labelId: record.labelId,
-        labelName,
+        labelName: labelInfo.name,
+        isMandatory: labelInfo.isMandatory,
+        displayOrder: labelInfo.order,
         content: record.content ?? null,
         isNotApplicable: record.isNotApplicable,
         updatedAt: record.updatedAt,
@@ -506,18 +565,76 @@ export class ProjectsService {
       }
     }
 
+    const sortDocumentation = (docs: DocumentationLabelSummary[]) =>
+      docs
+        .slice()
+        .sort(
+          (a, b) =>
+            a.displayOrder - b.displayOrder || a.labelName.localeCompare(b.labelName),
+        );
+
     const modules: ModuleRow[] = rawModules.map((mod) => ({
       ...mod,
-      documentationLabels: moduleDocs.get(mod.id) ?? [],
+      documentationLabels: sortDocumentation(moduleDocs.get(mod.id) ?? []),
     }));
     const features: FeatureRow[] = rawFeatures.map((feat) => ({
       ...feat,
-      documentationLabels: featureDocs.get(feat.id) ?? [],
+      documentationLabels: sortDocumentation(featureDocs.get(feat.id) ?? []),
     }));
 
     const modulesTree = this.buildModuleTree(modules, features);
 
     return { projectId, description: project.description, modules: modulesTree };
+  }
+
+  async listVisibleDocumentationLabelsForUser(user: AccessTokenPayload, projectId: string) {
+    const project = await this.ensureCanRead(user, projectId);
+    const role = await this.resolveProjectRole(user.sub, project);
+    return this.loadVisibleLabelsForRole(projectId, role);
+  }
+
+  async getDocumentationLabelPreferences(
+    user: AccessTokenPayload,
+    projectId: string,
+  ): Promise<DocumentationLabelPreferencePayload> {
+    const project = await this.ensureCanRead(user, projectId);
+    const role = await this.resolveProjectRole(user.sub, project);
+    const availableLabels = await this.loadVisibleLabelsForRole(projectId, role);
+    const visibleSet = new Set(availableLabels.map((label) => label.id));
+    const preference = await this.prisma.userProjectPreference.findUnique({
+      where: { userId_projectId: { projectId, userId: user.sub } },
+      select: { documentationLabelIds: true },
+    });
+    const selectedLabelIds = (preference?.documentationLabelIds ?? []).filter((id) =>
+      visibleSet.has(id),
+    );
+    return { projectId, availableLabels, selectedLabelIds };
+  }
+
+  async updateDocumentationLabelPreferences(
+    user: AccessTokenPayload,
+    projectId: string,
+    labelIds: string[],
+  ): Promise<DocumentationLabelPreferencePayload> {
+    const project = await this.ensureCanRead(user, projectId);
+    const role = await this.resolveProjectRole(user.sub, project);
+    const availableLabels = await this.loadVisibleLabelsForRole(projectId, role);
+    const visibleSet = new Set(availableLabels.map((label) => label.id));
+    const sanitizedIds = Array.from(new Set(labelIds.filter((id) => visibleSet.has(id))));
+
+    await this.prisma.userProjectPreference.upsert({
+      where: { userId_projectId: { projectId, userId: user.sub } },
+      create: {
+        projectId,
+        userId: user.sub,
+        documentationLabelIds: sanitizedIds,
+      },
+      update: {
+        documentationLabelIds: sanitizedIds,
+      },
+    });
+
+    return { projectId, availableLabels, selectedLabelIds: sanitizedIds };
   }
 
   async update(user: AccessTokenPayload, id: string, dto: UpdateProjectDto) {

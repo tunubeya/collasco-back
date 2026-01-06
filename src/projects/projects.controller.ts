@@ -9,6 +9,7 @@ import {
   Delete,
   Query,
   UseGuards,
+  Put,
 } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -22,6 +23,7 @@ import { ListIssuesDto, ListPullsDto } from 'src/github/dto/list.dto';
 import { JwtAccessGuard } from 'src/auth/guards/jwt-access.guard';
 import { IsEnum } from 'class-validator';
 import { ProjectMemberRole } from '@prisma/client';
+import { UpdateDocumentationLabelPreferencesDto } from './dto/update-documentation-label-preferences.dto';
 
 class UpdateMemberRoleDto {
   @IsEnum(ProjectMemberRole)
@@ -84,6 +86,31 @@ export class ProjectsController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.service.getStructure(user, id);
+  }
+
+  @Get(':id/documentation/labels')
+  async listDocumentationLabels(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.service.listVisibleDocumentationLabelsForUser(user, id);
+  }
+
+  @Get(':id/documentation/label-preferences')
+  async getDocumentationLabelPreferences(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.service.getDocumentationLabelPreferences(user, id);
+  }
+
+  @Put(':id/documentation/label-preferences')
+  async updateDocumentationLabelPreferences(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateDocumentationLabelPreferencesDto,
+  ) {
+    return this.service.updateDocumentationLabelPreferences(user, id, dto.labelIds);
   }
 
   // Gestión de miembros — solo owner
