@@ -275,24 +275,36 @@ export class FeaturesService {
 
   async getOne(user: AccessTokenPayload, featureId: string) {
     await this.requireFeature(user, featureId, 'READ');
-    return this.prisma.feature.findUnique({
-      where: { id: featureId },
-      include: {
-        versions: {
-          orderBy: { versionNumber: 'desc' },
-          select: {
-            id: true,
-            versionNumber: true,
-            changelog: true,
-            createdAt: true,
-            isRollback: true,
-            createdById: true,
+    const [feature, linkedFeaturesCount, testCasesCount] = await this.prisma.$transaction([
+      this.prisma.feature.findUnique({
+        where: { id: featureId },
+        include: {
+          versions: {
+            orderBy: { versionNumber: 'desc' },
+            select: {
+              id: true,
+              versionNumber: true,
+              changelog: true,
+              createdAt: true,
+              isRollback: true,
+              createdById: true,
+            },
           },
+          issueElements: true,
+          publishedVersion: { select: { id: true, versionNumber: true } },
         },
-        issueElements: true,
-        publishedVersion: { select: { id: true, versionNumber: true } },
-      },
-    });
+      }),
+      this.prisma.featureLink.count({
+        where: {
+          OR: [{ featureId }, { linkedFeatureId: featureId }],
+        },
+      }),
+      this.prisma.testCase.count({
+        where: { featureId },
+      }),
+    ]);
+
+    return feature ? { ...feature, linkedFeaturesCount, testCasesCount } : null;
   }
 
   async update(user: AccessTokenPayload, featureId: string, dto: UpdateFeatureDto) {

@@ -181,6 +181,7 @@ POST /modules/:moduleId/features — Crea feature dentro del módulo. · JWT · 
 GET /modules/:moduleId/features — Lista features del módulo (paginado). · JWT · Query: PaginationDto
 
 GET /features/:featureId — Detalle de feature (versions, issue, publicada). · JWT
+Respuesta incluye `linkedFeaturesCount` y `testCasesCount` para esa feature.
 
 PATCH /features/:featureId — Actualiza feature. · JWT · Body: UpdateFeatureDto
 
