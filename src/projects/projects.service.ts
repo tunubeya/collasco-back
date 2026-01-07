@@ -33,6 +33,14 @@ type DocumentationLabelSummary = {
   updatedAt: Date;
 };
 
+type LinkedFeatureSummary = {
+  id: string;
+  name: string;
+  moduleId: string;
+  moduleName: string;
+  reason: string | null;
+};
+
 type ModuleRow = {
   id: string;
   projectId: string;
@@ -55,6 +63,7 @@ type FeatureRow = {
   createdAt: Date;
   publishedVersionId: string | null;
   documentationLabels: DocumentationLabelSummary[];
+  linkedFeatures: LinkedFeatureSummary[];
 };
 
 type TreeFeatureNode = {
@@ -69,6 +78,7 @@ type TreeFeatureNode = {
   createdAt: Date;
   publishedVersionId: string | null;
   documentationLabels: DocumentationLabelSummary[];
+  linkedFeatures: LinkedFeatureSummary[];
 };
 
 export type TreeModuleNode = {
@@ -232,6 +242,7 @@ export class ProjectsService {
           createdAt: feat.createdAt,
           publishedVersionId: feat.publishedVersionId,
           documentationLabels: feat.documentationLabels,
+          linkedFeatures: feat.linkedFeatures,
         };
       });
 
@@ -428,6 +439,7 @@ export class ProjectsService {
     const features: FeatureRow[] = rawFeatures.map((feat) => ({
       ...feat,
       documentationLabels: [],
+      linkedFeatures: [],
     }));
 
     const trees = this.buildTreesByProject(modules, features);
@@ -471,7 +483,7 @@ export class ProjectsService {
     const project = await this.ensureCanRead(user, projectId);
     const viewerRole = await this.resolveProjectRole(user.sub, project);
 
-    const [rawModules, rawFeatures, labels, documentationFields, preference] =
+    const [rawModules, rawFeatures, labels, documentationFields, preference, featureLinkRows] =
       await this.prisma.$transaction([
         this.prisma.module.findMany({
           where: { projectId },
@@ -530,6 +542,28 @@ export class ProjectsService {
           where: { userId_projectId: { projectId, userId: user.sub } },
           select: { documentationLabelIds: true },
         }),
+        this.prisma.featureLink.findMany({
+          where: {
+            feature: { module: { projectId } },
+          },
+          include: {
+            feature: {
+              select: {
+                id: true,
+                name: true,
+                module: { select: { id: true, name: true } },
+              },
+            },
+            linkedFeature: {
+              select: {
+                id: true,
+                name: true,
+                module: { select: { id: true, name: true } },
+              },
+            },
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
       ]);
 
     const visibleLabels = this.filterVisibleLabels(
@@ -553,6 +587,7 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
 
     const moduleDocs = new Map<string, DocumentationLabelSummary[]>();
     const featureDocs = new Map<string, DocumentationLabelSummary[]>();
+    const featureLinksMap = new Map<string, LinkedFeatureSummary[]>();
 
     for (const record of documentationFields) {
       const labelInfo = visibleLabelMap.get(record.labelId);
@@ -591,6 +626,27 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
           return a.labelName.localeCompare(b.labelName);
         });
 
+    const addLink = (sourceId: string, target: { id: string; name: string; module: { id: string; name: string } }, reason: string | null) => {
+      const list = featureLinksMap.get(sourceId) ?? [];
+      list.push({
+        id: target.id,
+        name: target.name,
+        moduleId: target.module.id,
+        moduleName: target.module.name,
+        reason,
+      });
+      featureLinksMap.set(sourceId, list);
+    };
+    for (const link of featureLinkRows) {
+      addLink(link.feature.id, link.linkedFeature, link.reason ?? null);
+      addLink(link.linkedFeature.id, link.feature, link.reason ?? null);
+    }
+
+    const sortLinkedFeatures = (items: LinkedFeatureSummary[]) =>
+      items
+        .slice()
+        .sort((a, b) => a.moduleName.localeCompare(b.moduleName) || a.name.localeCompare(b.name));
+
     const modules: ModuleRow[] = rawModules.map((mod) => ({
       ...mod,
       documentationLabels: sortDocumentation(moduleDocs.get(mod.id) ?? []),
@@ -598,6 +654,7 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
     const features: FeatureRow[] = rawFeatures.map((feat) => ({
       ...feat,
       documentationLabels: sortDocumentation(featureDocs.get(feat.id) ?? []),
+      linkedFeatures: sortLinkedFeatures(featureLinksMap.get(feat.id) ?? []),
     }));
 
     const modulesTree = this.buildModuleTree(modules, features);

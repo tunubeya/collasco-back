@@ -93,6 +93,15 @@ Respuesta:
               "isNotApplicable": false,
               "updatedAt": "2024-06-01T00:00:00.000Z"
             }
+          ],
+          "linkedFeatures": [
+            {
+              "id": "uuid-feature-b",
+              "name": "Feature B",
+              "moduleId": "uuid-module-2",
+              "moduleName": "Otro módulo",
+              "reason": "Dependencia funcional"
+            }
           ]
         }
       ],
@@ -117,6 +126,7 @@ Notas:
 - Cada entrada de `documentationLabels` incluye `isMandatory` y se ordena usando la prioridad (`displayOrder`) definida en los labels del proyecto.
 - Si el usuario guardó preferencias (`selectedLabelIds`), el árbol solo incluye esos labels y respeta el orden elegido; si no hay preferencias, se usan todos los visibles.
 - Cuando un módulo o feature no tiene documentación, `documentationLabels` será un arreglo vacío.
+- Cada feature incluye `linkedFeatures`, listado de otras features del mismo proyecto con `{ id, name, moduleId, moduleName, reason }`.
 
 GET /projects/:id/documentation/labels — Lista las etiquetas de documentación visibles para el usuario autenticado. · JWT
 
