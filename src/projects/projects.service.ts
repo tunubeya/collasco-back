@@ -39,6 +39,7 @@ type LinkedFeatureSummary = {
   moduleId: string;
   moduleName: string;
   reason: string | null;
+  direction: 'references' | 'referenced_by';
 };
 
 type ModuleRow = {
@@ -626,20 +627,29 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
           return a.labelName.localeCompare(b.labelName);
         });
 
-    const addLink = (sourceId: string, target: { id: string; name: string; module: { id: string; name: string } }, reason: string | null) => {
+    const addLink = (
+      sourceId: string,
+      target: { id: string; name: string; module: { id: string; name: string } },
+      direction: 'references' | 'referenced_by',
+      reason: string | null,
+    ) => {
       const list = featureLinksMap.get(sourceId) ?? [];
       list.push({
         id: target.id,
         name: target.name,
         moduleId: target.module.id,
         moduleName: target.module.name,
+        direction,
         reason,
       });
       featureLinksMap.set(sourceId, list);
     };
     for (const link of featureLinkRows) {
-      addLink(link.feature.id, link.linkedFeature, link.reason ?? null);
-      addLink(link.linkedFeature.id, link.feature, link.reason ?? null);
+      const linkReason = link.reason ?? null;
+      const firstDirection = link.initiatorFeatureId === link.feature.id ? 'references' : 'referenced_by';
+      const secondDirection = link.initiatorFeatureId === link.linkedFeature.id ? 'references' : 'referenced_by';
+      addLink(link.feature.id, link.linkedFeature, firstDirection, linkReason);
+      addLink(link.linkedFeature.id, link.feature, secondDirection, linkReason);
     }
 
     const sortLinkedFeatures = (items: LinkedFeatureSummary[]) =>

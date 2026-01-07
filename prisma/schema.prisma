@@ -269,6 +269,7 @@ model Feature {
   publishedVersion   FeatureVersion?  @relation("FeaturePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
   linkedFeatures     FeatureLink[]    @relation("FeatureLink_feature")
   linkedByFeatures   FeatureLink[]    @relation("FeatureLink_linked")
+  initiatedLinks     FeatureLink[]    @relation("FeatureLink_initiator")
   documentationFields DocumentationField[] @relation("FeatureDocumentation")
 
   @@unique([moduleId, name])
@@ -383,13 +384,16 @@ model FeatureLink {
   linkedFeatureId String
   createdAt       DateTime @default(now())
   reason          String?
+  initiatorFeatureId String
 
-  feature       Feature @relation("FeatureLink_feature", fields: [featureId], references: [id], onDelete: Cascade)
-  linkedFeature Feature @relation("FeatureLink_linked", fields: [linkedFeatureId], references: [id], onDelete: Cascade)
+  feature         Feature @relation("FeatureLink_feature", fields: [featureId], references: [id], onDelete: Cascade)
+  linkedFeature   Feature @relation("FeatureLink_linked", fields: [linkedFeatureId], references: [id], onDelete: Cascade)
+  initiatorFeature Feature @relation("FeatureLink_initiator", fields: [initiatorFeatureId], references: [id], onDelete: Cascade)
 
   @@unique([featureId, linkedFeatureId])
   @@index([featureId])
   @@index([linkedFeatureId])
+  @@index([initiatorFeatureId])
 }
 
 model ProjectLabel {

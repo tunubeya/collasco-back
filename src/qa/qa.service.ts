@@ -151,6 +151,7 @@ type LinkedFeatureSummary = {
   moduleId: string;
   moduleName: string;
   reason: string | null;
+  direction: 'references' | 'referenced_by';
 };
 
 type ProjectLabelView = {
@@ -460,12 +461,15 @@ export class QaService {
         link.featureId === featureId
           ? link.linkedFeature
           : link.feature;
+      const direction =
+        link.initiatorFeatureId === featureId ? 'references' : 'referenced_by';
       return {
         id: other.id,
         name: other.name,
         moduleId: other.module.id,
         moduleName: other.module.name,
         reason: link.reason ?? null,
+        direction,
       };
     });
   }
@@ -498,11 +502,15 @@ export class QaService {
           linkedFeatureId: pair.linkedFeatureId,
         },
       },
-      update: reason !== undefined ? { reason } : {},
+      update: {
+        ...(reason !== undefined ? { reason } : {}),
+        initiatorFeatureId: featureId,
+      },
       create: {
         featureId: pair.featureId,
         linkedFeatureId: pair.linkedFeatureId,
         reason: reason ?? null,
+        initiatorFeatureId: featureId,
       },
     });
 
