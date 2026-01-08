@@ -20,6 +20,7 @@ import { CreateProjectTestRunDto } from './dto/create-project-test-run.dto';
 import { UpsertResultsDto } from './dto/upsert-results.dto';
 import { UpdateTestRunDto } from './dto/update-test-run.dto';
 import { LinkFeatureDto } from './dto/link-feature.dto';
+import { UpdateLinkedFeatureDto } from './dto/update-linked-feature.dto';
 
 @Controller('qa')
 export class QaController {
@@ -73,6 +74,17 @@ export class QaController {
   ) {
     const userId = this.resolveUserId(user);
     return this.qaService.unlinkFeatures(userId, featureId, linkedFeatureId);
+  }
+
+  @Patch('features/:featureId/linked-features/:linkedFeatureId')
+  async updateLinkedFeature(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('featureId', ParseUUIDPipe) featureId: string,
+    @Param('linkedFeatureId', ParseUUIDPipe) linkedFeatureId: string,
+    @Body() dto: UpdateLinkedFeatureDto,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.updateLinkedFeature(userId, featureId, linkedFeatureId, dto);
   }
 
   @Patch('test-cases/:id')

@@ -14,6 +14,7 @@ import { UpsertResultsDto } from './dto/upsert-results.dto';
 import { assertProjectRead, assertProjectWrite } from './guards/rbac.helpers';
 import { CreateProjectTestRunDto } from './dto/create-project-test-run.dto';
 import { UpdateTestRunDto } from './dto/update-test-run.dto';
+import { UpdateLinkedFeatureDto } from './dto/update-linked-feature.dto';
 
 const testRunDetailInclude: Prisma.TestRunInclude = {
   feature: {
@@ -513,6 +514,98 @@ export class QaService {
         initiatorFeatureId: featureId,
       },
     });
+
+    return this.listLinkedFeatures(userId, featureId);
+  }
+
+  async updateLinkedFeature(
+    userId: string,
+    featureId: string,
+    linkedFeatureId: string,
+    dto: UpdateLinkedFeatureDto,
+  ): Promise<LinkedFeatureSummary[]> {
+    if (featureId === linkedFeatureId) {
+      throw new BadRequestException('Cannot update a self link.');
+    }
+
+    const [projectId, linkedProjectId] = await Promise.all([
+      this.getProjectIdOrThrow(featureId),
+      this.getProjectIdOrThrow(linkedFeatureId),
+    ]);
+    if (projectId !== linkedProjectId) {
+      throw new BadRequestException('Linked features must belong to the same project.');
+    }
+    await assertProjectWrite(this.prisma, userId, projectId);
+
+    const pair = this.normalizeFeatureLinkPair(featureId, linkedFeatureId);
+    const existing = await this.prisma.featureLink.findUnique({
+      where: {
+        featureId_linkedFeatureId: {
+          featureId: pair.featureId,
+          linkedFeatureId: pair.linkedFeatureId,
+        },
+      },
+    });
+    if (!existing) {
+      throw new NotFoundException('Linked feature relationship not found.');
+    }
+
+    const targetFeatureId = dto.targetFeatureId ?? linkedFeatureId;
+    const targetChanged = targetFeatureId !== linkedFeatureId;
+    const nextReason =
+      dto.reason !== undefined ? dto.reason : existing.reason ?? null;
+
+    if (targetFeatureId === featureId) {
+      throw new BadRequestException('Cannot link a feature to itself.');
+    }
+
+    if (targetChanged) {
+      const newTargetProjectId = await this.getProjectIdOrThrow(targetFeatureId);
+      if (newTargetProjectId !== projectId) {
+        throw new BadRequestException('Linked features must belong to the same project.');
+      }
+
+      const newPair = this.normalizeFeatureLinkPair(featureId, targetFeatureId);
+      await this.prisma.$transaction([
+        this.prisma.featureLink.deleteMany({
+          where: {
+            featureId: pair.featureId,
+            linkedFeatureId: pair.linkedFeatureId,
+          },
+        }),
+        this.prisma.featureLink.upsert({
+          where: {
+            featureId_linkedFeatureId: {
+              featureId: newPair.featureId,
+              linkedFeatureId: newPair.linkedFeatureId,
+            },
+          },
+          update: {
+            reason: nextReason,
+            initiatorFeatureId: featureId,
+          },
+          create: {
+            featureId: newPair.featureId,
+            linkedFeatureId: newPair.linkedFeatureId,
+            reason: nextReason,
+            initiatorFeatureId: featureId,
+          },
+        }),
+      ]);
+    } else {
+      await this.prisma.featureLink.update({
+        where: {
+          featureId_linkedFeatureId: {
+            featureId: pair.featureId,
+            linkedFeatureId: pair.linkedFeatureId,
+          },
+        },
+        data: {
+          reason: nextReason,
+          initiatorFeatureId: featureId,
+        },
+      });
+    }
 
     return this.listLinkedFeatures(userId, featureId);
   }

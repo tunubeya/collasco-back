@@ -128,6 +128,7 @@ Notas:
 - Si el usuario guardó preferencias (`selectedLabelIds`), el árbol solo incluye esos labels y respeta el orden elegido; si no hay preferencias, se usan todos los visibles.
 - Cuando un módulo o feature no tiene documentación, `documentationLabels` será un arreglo vacío.
 - Cada feature incluye `linkedFeatures`, listado de otras features del mismo proyecto con `{ id, name, moduleId, moduleName, reason, direction }`, donde `direction` es `references` (la feature actual referencia a la otra) o `referenced_by`.
+- La descripción (`reason`) del vínculo se puede actualizar vía `PATCH /qa/features/:featureId/linked-features/:linkedFeatureId` enviando `{ "reason": "texto" }` (acepta `null` para limpiar la nota). Ese mismo endpoint también permite mover el vínculo a otro target (`targetFeatureId`) eliminando la relación previa y creando la nueva con la razón existente (o la nueva si se incluye).
 
 GET /projects/:id/documentation/labels — Lista las etiquetas de documentación visibles para el usuario autenticado. · JWT
 
