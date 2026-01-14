@@ -29,7 +29,7 @@ export class DocumentationController {
   }
 
   @Get('modules/:moduleId/documentation')
-  async listModuleDocumentation(
+  async listModuleDocumentation( 
     @CurrentUser() user: AccessTokenPayload | undefined,
     @Param('moduleId', ParseUUIDPipe) moduleId: string,
   ) {
