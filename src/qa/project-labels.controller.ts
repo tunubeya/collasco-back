@@ -8,6 +8,7 @@ import { UpdateProjectLabelOrderDto } from './dto/update-project-label-order.dto
 
 @Controller('qa/projects/:projectId/labels')
 export class ProjectLabelsController {
+
   constructor(private readonly qaService: QaService) {}
 
   @Get()
@@ -26,6 +27,7 @@ export class ProjectLabelsController {
     @Body() dto: CreateProjectLabelDto,
   ) {
     const userId = this.resolveUserId(user);
+    console.log(dto);
     return this.qaService.createProjectLabel(userId, projectId, dto);
   }
 

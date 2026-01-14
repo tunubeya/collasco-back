@@ -401,6 +401,7 @@ model ProjectLabel {
   projectId      String
   name           String
   isMandatory    Boolean             @default(false)
+  defaultNotApplicable Boolean       @default(false)
   displayOrder   Int                 @default(0)
   visibleToRoles ProjectMemberRole[] @default([])
   readOnlyRoles  ProjectMemberRole[] @default([])

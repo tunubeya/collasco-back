@@ -11,7 +11,7 @@ import type { CreateModuleDto } from './dto/create-module.dto';
 import type { UpdateModuleDto } from './dto/update-module.dto';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
-import { Prisma, ProjectMemberRole } from '@prisma/client';
+import { DocumentationEntityType, Prisma, ProjectMemberRole } from '@prisma/client';
 import { MoveDirection } from 'src/common/dto/move-order.dto';
 
 type Allowed = 'READ' | 'WRITE';
@@ -433,16 +433,37 @@ export class ModulesService {
 
     const nextOrder = await this.nextModuleSortOrder(projectId, dto.parentModuleId ?? null);
 
-    return this.prisma.module.create({
-      data: {
-        projectId,
-        parentModuleId: dto.parentModuleId ?? null,
-        name: dto.name,
-        description: dto.description ?? null,
-        isRoot: !!dto.isRoot,
-        sortOrder: nextOrder,
-        lastModifiedById: user.sub,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const module = await tx.module.create({
+        data: {
+          projectId,
+          parentModuleId: dto.parentModuleId ?? null,
+          name: dto.name,
+          description: dto.description ?? null,
+          isRoot: !!dto.isRoot,
+          sortOrder: nextOrder,
+          lastModifiedById: user.sub,
+        },
+      });
+
+      const labels = await tx.projectLabel.findMany({
+        where: { projectId, defaultNotApplicable: true },
+        select: { id: true },
+      });
+      if (labels.length > 0) {
+        await tx.documentationField.createMany({
+          data: labels.map((label) => ({
+            projectId,
+            entityType: DocumentationEntityType.MODULE,
+            moduleId: module.id,
+            labelId: label.id,
+            isNotApplicable: true,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      return module;
     });
   }
 

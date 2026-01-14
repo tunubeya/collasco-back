@@ -14,7 +14,7 @@ import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
 import { CommitSummary, GithubService } from 'src/github/github.service';
 import { SyncCommitsDto } from './dto/sync-commits.dto';
-import { FeatureStatus, Prisma, ProjectMemberRole, ReviewStatus } from '@prisma/client';
+import { DocumentationEntityType, FeatureStatus, Prisma, ProjectMemberRole, ReviewStatus } from '@prisma/client';
 import { createHash } from 'crypto';
 import { MoveDirection } from 'src/common/dto/move-order.dto';
 
@@ -233,20 +233,41 @@ export class FeaturesService {
 
   // ===== CRUD en módulo =====
   async createInModule(user: AccessTokenPayload, moduleId: string, dto: CreateFeatureDto) {
-    await this.requireModule(user, moduleId, 'WRITE');
+    const mod = await this.requireModule(user, moduleId, 'WRITE');
 
     const nextOrder = await this.nextSortOrderInModule(moduleId);
 
-    return this.prisma.feature.create({
-      data: {
-        moduleId,
-        name: dto.name,
-        description: dto.description ?? null,
-        priority: dto.priority === null ? null : dto.priority ?? undefined,
-        status: dto.status === null ? null : dto.status ?? FeatureStatus.PENDING,
-        lastModifiedById: user.sub,
-        sortOrder: nextOrder,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const feature = await tx.feature.create({
+        data: {
+          moduleId,
+          name: dto.name,
+          description: dto.description ?? null,
+          priority: dto.priority === null ? null : dto.priority ?? undefined,
+          status: dto.status === null ? null : dto.status ?? FeatureStatus.PENDING,
+          lastModifiedById: user.sub,
+          sortOrder: nextOrder,
+        },
+      });
+
+      const labels = await tx.projectLabel.findMany({
+        where: { projectId: mod.projectId, defaultNotApplicable: true },
+        select: { id: true },
+      });
+      if (labels.length > 0) {
+        await tx.documentationField.createMany({
+          data: labels.map((label) => ({
+            projectId: mod.projectId,
+            entityType: DocumentationEntityType.FEATURE,
+            featureId: feature.id,
+            labelId: label.id,
+            isNotApplicable: true,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      return feature;
     });
   }
 

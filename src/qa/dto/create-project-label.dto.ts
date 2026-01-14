@@ -11,6 +11,10 @@ export class CreateProjectLabelDto {
   isMandatory?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  defaultNotApplicable?: boolean;
+
+  @IsOptional()
   @IsArray()
   @ArrayUnique()
   @IsEnum(ProjectMemberRole, { each: true })

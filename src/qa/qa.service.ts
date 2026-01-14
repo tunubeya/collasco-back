@@ -159,6 +159,7 @@ type ProjectLabelView = {
   id: string;
   name: string;
   isMandatory: boolean;
+  defaultNotApplicable: boolean;
   visibleToRoles: ProjectMemberRole[];
   readOnlyRoles: ProjectMemberRole[];
   displayOrder: number;
@@ -272,6 +273,7 @@ export class QaService {
     dto: {
       name: string;
       isMandatory?: boolean;
+      defaultNotApplicable?: boolean;
       visibleToRoles?: ProjectMemberRole[];
       readOnlyRoles?: ProjectMemberRole[];
     },
@@ -288,11 +290,15 @@ export class QaService {
         projectId,
         name: dto.name.trim(),
         isMandatory: dto.isMandatory ?? false,
+        defaultNotApplicable: dto.defaultNotApplicable ?? false,
         displayOrder: nextOrder,
         visibleToRoles: dto.visibleToRoles ?? [],
         readOnlyRoles: dto.readOnlyRoles ?? [],
       },
     });
+    if (created.defaultNotApplicable) {
+      await this.createDefaultDocumentationForLabel(projectId, created.id);
+    }
     return this.mapProjectLabel(created);
   }
 
@@ -303,6 +309,7 @@ export class QaService {
     dto: {
       name?: string;
       isMandatory?: boolean;
+      defaultNotApplicable?: boolean;
       visibleToRoles?: ProjectMemberRole[];
       readOnlyRoles?: ProjectMemberRole[];
     },
@@ -310,7 +317,7 @@ export class QaService {
     await this.assertProjectOwner(userId, projectId);
     const label = await this.prisma.projectLabel.findUnique({
       where: { id: labelId },
-      select: { projectId: true },
+      select: { projectId: true, defaultNotApplicable: true },
     });
     if (!label || label.projectId !== projectId) {
       throw new NotFoundException('Label not found.');
@@ -318,12 +325,16 @@ export class QaService {
     const data: Prisma.ProjectLabelUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name.trim();
     if (dto.isMandatory !== undefined) data.isMandatory = dto.isMandatory;
+    if (dto.defaultNotApplicable !== undefined) data.defaultNotApplicable = dto.defaultNotApplicable;
     if (dto.visibleToRoles !== undefined) data.visibleToRoles = dto.visibleToRoles;
     if (dto.readOnlyRoles !== undefined) data.readOnlyRoles = dto.readOnlyRoles;
     const updated = await this.prisma.projectLabel.update({
       where: { id: labelId },
       data,
     });
+    if (dto.defaultNotApplicable === true && !label.defaultNotApplicable) {
+      await this.createDefaultDocumentationForLabel(projectId, labelId);
+    }
     return this.mapProjectLabel(updated);
   }
 
@@ -1813,6 +1824,7 @@ export class QaService {
     id: string;
     name: string;
     isMandatory: boolean;
+    defaultNotApplicable: boolean;
     visibleToRoles: ProjectMemberRole[];
     readOnlyRoles: ProjectMemberRole[];
     displayOrder: number;
@@ -1821,6 +1833,7 @@ export class QaService {
       id: label.id,
       name: label.name,
       isMandatory: label.isMandatory,
+      defaultNotApplicable: label.defaultNotApplicable ?? false,
       visibleToRoles: label.visibleToRoles ?? [],
       readOnlyRoles: label.readOnlyRoles ?? [],
       displayOrder: label.displayOrder ?? 0,
@@ -1891,6 +1904,57 @@ export class QaService {
           canEdit: this.canEditLabel(role, label),
         };
       });
+  }
+
+  private async createDefaultDocumentationForLabel(projectId: string, labelId: string): Promise<void> {
+    const [modules, features] = await this.prisma.$transaction([
+      this.prisma.module.findMany({
+        where: { projectId },
+        select: { id: true },
+      }),
+      this.prisma.feature.findMany({
+        where: { module: { projectId } },
+        select: { id: true },
+      }),
+    ]);
+
+    const moduleDocs = modules.map((mod) => ({
+      projectId,
+      entityType: DocumentationEntityType.MODULE,
+      moduleId: mod.id,
+      labelId,
+      isNotApplicable: true,
+    }));
+
+    const featureDocs = features.map((feature) => ({
+      projectId,
+      entityType: DocumentationEntityType.FEATURE,
+      featureId: feature.id,
+      labelId,
+      isNotApplicable: true,
+    }));
+
+    const writes: Prisma.PrismaPromise<unknown>[] = [];
+    if (moduleDocs.length > 0) {
+      writes.push(
+        this.prisma.documentationField.createMany({
+          data: moduleDocs,
+          skipDuplicates: true,
+        }),
+      );
+    }
+    if (featureDocs.length > 0) {
+      writes.push(
+        this.prisma.documentationField.createMany({
+          data: featureDocs,
+          skipDuplicates: true,
+        }),
+      );
+    }
+
+    if (writes.length > 0) {
+      await this.prisma.$transaction(writes);
+    }
   }
 
   private async upsertDocumentationField(params: {
