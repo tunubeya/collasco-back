@@ -513,7 +513,7 @@ export class QaService {
     featureId: string,
     targetFeatureId: string,
     reason?: string,
-  ): Promise<LinkedFeatureSummary[]> {
+  ): Promise<LinkedFeaturesResponse> {
     if (featureId === targetFeatureId) {
       throw new BadRequestException('Cannot link a feature to itself.');
     }
@@ -556,7 +556,7 @@ export class QaService {
     featureId: string,
     linkedFeatureId: string,
     dto: UpdateLinkedFeatureDto,
-  ): Promise<LinkedFeatureSummary[]> {
+  ): Promise<LinkedFeaturesResponse> {
     if (featureId === linkedFeatureId) {
       throw new BadRequestException('Cannot update a self link.');
     }
@@ -647,7 +647,7 @@ export class QaService {
     userId: string,
     featureId: string,
     linkedFeatureId: string,
-  ): Promise<LinkedFeatureSummary[]> {
+  ): Promise<LinkedFeaturesResponse> {
     if (featureId === linkedFeatureId) {
       throw new BadRequestException('Cannot remove a self link.');
     }
