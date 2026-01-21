@@ -155,6 +155,11 @@ type LinkedFeatureSummary = {
   direction: 'references' | 'referenced_by';
 };
 
+type LinkedFeaturesResponse = {
+  references: LinkedFeatureSummary[];
+  referencedBy: LinkedFeatureSummary[];
+};
+
 type ProjectLabelView = {
   id: string;
   name: string;
@@ -441,7 +446,11 @@ export class QaService {
     return this.listModuleDocumentation(userId, moduleId);
   }
 
-  async listLinkedFeatures(userId: string, featureId: string): Promise<LinkedFeatureSummary[]> {
+  async listLinkedFeatures(
+    userId: string,
+    featureId: string,
+    direction?: 'references' | 'referenced_by',
+  ): Promise<LinkedFeaturesResponse> {
     const projectId = await this.getProjectIdOrThrow(featureId);
     await assertProjectRead(this.prisma, userId, projectId);
 
@@ -468,22 +477,35 @@ export class QaService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return links.map((link) => {
-      const other =
-        link.featureId === featureId
-          ? link.linkedFeature
-          : link.feature;
-      const direction =
+    const references: LinkedFeatureSummary[] = [];
+    const referencedBy: LinkedFeatureSummary[] = [];
+
+    for (const link of links) {
+      const other = link.featureId === featureId ? link.linkedFeature : link.feature;
+      const linkDirection =
         link.initiatorFeatureId === featureId ? 'references' : 'referenced_by';
-      return {
+      const summary: LinkedFeatureSummary = {
         id: other.id,
         name: other.name,
         moduleId: other.module.id,
         moduleName: other.module.name,
         reason: link.reason ?? null,
-        direction,
+        direction: linkDirection,
       };
-    });
+      if (linkDirection === 'references') {
+        references.push(summary);
+      } else {
+        referencedBy.push(summary);
+      }
+    }
+
+    if (direction === 'references') {
+      return { references, referencedBy: [] };
+    }
+    if (direction === 'referenced_by') {
+      return { references: [], referencedBy };
+    }
+    return { references, referencedBy };
   }
 
   async linkFeatures(

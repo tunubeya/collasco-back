@@ -51,9 +51,17 @@ export class QaController {
   async listLinkedFeatures(
     @CurrentUser() user: AccessTokenPayload | undefined,
     @Param('featureId', ParseUUIDPipe) featureId: string,
+    @Query('direction') direction?: string,
   ) {
     const userId = this.resolveUserId(user);
-    return this.qaService.listLinkedFeatures(userId, featureId);
+    if (direction && direction !== 'references' && direction !== 'referenced_by') {
+      throw new BadRequestException('direction must be references or referenced_by');
+    }
+    return this.qaService.listLinkedFeatures(
+      userId,
+      featureId,
+      direction as 'references' | 'referenced_by' | undefined,
+    );
   }
 
   @Post('features/:featureId/linked-features')
