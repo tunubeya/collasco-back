@@ -579,9 +579,11 @@ export class ProjectsService {
     );
 const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]));
 
-    const preferredOrder = (preference?.documentationLabelIds ?? []).filter((id) =>
-      visibleLabelMap.has(id),
-    );
+    const rawPreferenceIds = preference?.documentationLabelIds ?? [];
+    const preferNone = rawPreferenceIds.length === 0;
+    const preferredOrder = preferNone
+      ? []
+      : rawPreferenceIds.filter((id) => visibleLabelMap.has(id));
     const preferredSet = new Set(preferredOrder);
     const preferCustomOrder = preferredOrder.length > 0;
     const preferredOrderMap = new Map(preferredOrder.map((id, index) => [id, index]));
@@ -590,27 +592,29 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
     const featureDocs = new Map<string, DocumentationLabelSummary[]>();
     const featureLinksMap = new Map<string, LinkedFeatureSummary[]>();
 
-    for (const record of documentationFields) {
-      const labelInfo = visibleLabelMap.get(record.labelId);
-      if (!labelInfo) continue;
-      if (preferCustomOrder && !preferredSet.has(record.labelId)) continue;
-      const summary: DocumentationLabelSummary = {
-        labelId: record.labelId,
-        labelName: labelInfo.name,
-        isMandatory: labelInfo.isMandatory,
-        displayOrder: labelInfo.order,
-        content: record.content ?? null,
-        isNotApplicable: record.isNotApplicable,
-        updatedAt: record.updatedAt,
-      };
-      if (record.entityType === DocumentationEntityType.MODULE && record.moduleId) {
-        const list = moduleDocs.get(record.moduleId) ?? [];
-        list.push(summary);
-        moduleDocs.set(record.moduleId, list);
-      } else if (record.entityType === DocumentationEntityType.FEATURE && record.featureId) {
-        const list = featureDocs.get(record.featureId) ?? [];
-        list.push(summary);
-        featureDocs.set(record.featureId, list);
+    if (!preferNone) {
+      for (const record of documentationFields) {
+        const labelInfo = visibleLabelMap.get(record.labelId);
+        if (!labelInfo) continue;
+        if (preferCustomOrder && !preferredSet.has(record.labelId)) continue;
+        const summary: DocumentationLabelSummary = {
+          labelId: record.labelId,
+          labelName: labelInfo.name,
+          isMandatory: labelInfo.isMandatory,
+          displayOrder: labelInfo.order,
+          content: record.content ?? null,
+          isNotApplicable: record.isNotApplicable,
+          updatedAt: record.updatedAt,
+        };
+        if (record.entityType === DocumentationEntityType.MODULE && record.moduleId) {
+          const list = moduleDocs.get(record.moduleId) ?? [];
+          list.push(summary);
+          moduleDocs.set(record.moduleId, list);
+        } else if (record.entityType === DocumentationEntityType.FEATURE && record.featureId) {
+          const list = featureDocs.get(record.featureId) ?? [];
+          list.push(summary);
+          featureDocs.set(record.featureId, list);
+        }
       }
     }
 
