@@ -397,6 +397,16 @@ export class QaService {
     });
   }
 
+  async listProjectDocumentation(userId: string, projectId: string): Promise<DocumentationEntry[]> {
+    await assertProjectRead(this.prisma, userId, projectId);
+    return this.listDocumentationEntries({
+      userId,
+      projectId,
+      entityType: DocumentationEntityType.PROJECT,
+      entityId: projectId,
+    });
+  }
+
   async listModuleDocumentation(userId: string, moduleId: string): Promise<DocumentationEntry[]> {
     const projectId = await this.getProjectIdByModuleOrThrow(moduleId);
     await assertProjectRead(this.prisma, userId, projectId);
@@ -425,6 +435,24 @@ export class QaService {
       dto,
     });
     return this.listFeatureDocumentation(userId, featureId);
+  }
+
+  async upsertProjectDocumentation(
+    userId: string,
+    projectId: string,
+    labelId: string,
+    dto: { content?: string; isNotApplicable?: boolean },
+  ): Promise<DocumentationEntry[]> {
+    await assertProjectWrite(this.prisma, userId, projectId);
+    await this.upsertDocumentationField({
+      userId,
+      projectId,
+      entityType: DocumentationEntityType.PROJECT,
+      entityId: projectId,
+      labelId,
+      dto,
+    });
+    return this.listProjectDocumentation(userId, projectId);
   }
 
   async upsertModuleDocumentation(
@@ -1902,8 +1930,8 @@ export class QaService {
       where: {
         projectId,
         entityType,
-        featureId: entityType === DocumentationEntityType.FEATURE ? entityId : undefined,
-        moduleId: entityType === DocumentationEntityType.MODULE ? entityId : undefined,
+        featureId: entityType === DocumentationEntityType.FEATURE ? entityId : null,
+        moduleId: entityType === DocumentationEntityType.MODULE ? entityId : null,
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -1940,6 +1968,15 @@ export class QaService {
       }),
     ]);
 
+    const projectDocs = [
+      {
+        projectId,
+        entityType: DocumentationEntityType.PROJECT,
+        labelId,
+        isNotApplicable: true,
+      },
+    ];
+
     const moduleDocs = modules.map((mod) => ({
       projectId,
       entityType: DocumentationEntityType.MODULE,
@@ -1957,6 +1994,12 @@ export class QaService {
     }));
 
     const writes: Prisma.PrismaPromise<unknown>[] = [];
+    writes.push(
+      this.prisma.documentationField.createMany({
+        data: projectDocs,
+        skipDuplicates: true,
+      }),
+    );
     if (moduleDocs.length > 0) {
       writes.push(
         this.prisma.documentationField.createMany({

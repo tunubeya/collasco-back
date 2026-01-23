@@ -17,6 +17,15 @@ export class DocumentationController {
     return this.qaService.listFeatureDocumentation(userId, featureId);
   }
 
+  @Get('projects/:projectId/documentation')
+  async listProjectDocumentation(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.listProjectDocumentation(userId, projectId);
+  }
+
   @Put('features/:featureId/documentation/:labelId')
   async upsertFeatureDocumentation(
     @CurrentUser() user: AccessTokenPayload | undefined,
@@ -26,6 +35,17 @@ export class DocumentationController {
   ) {
     const userId = this.resolveUserId(user);
     return this.qaService.upsertFeatureDocumentation(userId, featureId, labelId, dto);
+  }
+
+  @Put('projects/:projectId/documentation/:labelId')
+  async upsertProjectDocumentation(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('labelId', ParseUUIDPipe) labelId: string,
+    @Body() dto: UpdateDocumentationEntryDto,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.upsertProjectDocumentation(userId, projectId, labelId, dto);
   }
 
   @Get('modules/:moduleId/documentation')

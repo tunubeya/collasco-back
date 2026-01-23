@@ -526,18 +526,24 @@ export class ProjectsService {
         this.prisma.documentationField.findMany({
           where: {
             projectId,
-            entityType: { in: [DocumentationEntityType.MODULE, DocumentationEntityType.FEATURE] },
+            entityType: {
+              in: [
+                DocumentationEntityType.MODULE,
+                DocumentationEntityType.FEATURE,
+                DocumentationEntityType.PROJECT,
+              ],
+            },
           },
-        select: {
-          labelId: true,
-          entityType: true,
-          moduleId: true,
-          featureId: true,
-          content: true,
-          isNotApplicable: true,
-          updatedAt: true,
-        },
-        orderBy: { createdAt: 'asc' },
+          select: {
+            labelId: true,
+            entityType: true,
+            moduleId: true,
+            featureId: true,
+            content: true,
+            isNotApplicable: true,
+            updatedAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
         }),
         this.prisma.userProjectPreference.findUnique({
           where: { userId_projectId: { projectId, userId: user.sub } },
@@ -590,6 +596,7 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
 
     const moduleDocs = new Map<string, DocumentationLabelSummary[]>();
     const featureDocs = new Map<string, DocumentationLabelSummary[]>();
+    const projectDocs: DocumentationLabelSummary[] = [];
     const featureLinksMap = new Map<string, LinkedFeatureSummary[]>();
 
     if (!preferNone) {
@@ -614,6 +621,8 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
           const list = featureDocs.get(record.featureId) ?? [];
           list.push(summary);
           featureDocs.set(record.featureId, list);
+        } else if (record.entityType === DocumentationEntityType.PROJECT) {
+          projectDocs.push(summary);
         }
       }
     }
@@ -673,7 +682,12 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
 
     const modulesTree = this.buildModuleTree(modules, features);
 
-    return { projectId, description: project.description, modules: modulesTree };
+    return {
+      projectId,
+      description: project.description,
+      documentationLabels: sortDocumentation(projectDocs),
+      modules: modulesTree,
+    };
   }
 
   async listVisibleDocumentationLabelsForUser(user: AccessTokenPayload, projectId: string) {

@@ -64,6 +64,7 @@ enum TestRunStatus {
 enum DocumentationEntityType {
   FEATURE
   MODULE
+  PROJECT
 }
 
 model User {
