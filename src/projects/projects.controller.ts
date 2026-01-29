@@ -24,6 +24,7 @@ import { JwtAccessGuard } from 'src/auth/guards/jwt-access.guard';
 import { IsEnum } from 'class-validator';
 import { ProjectMemberRole } from '@prisma/client';
 import { UpdateDocumentationLabelPreferencesDto } from './dto/update-documentation-label-preferences.dto';
+import { CreateManualShareLinkDto } from './dto/create-manual-share-link.dto';
 
 class UpdateMemberRoleDto {
   @IsEnum(ProjectMemberRole)
@@ -111,6 +112,32 @@ export class ProjectsController {
     @Body() dto: UpdateDocumentationLabelPreferencesDto,
   ) {
     return this.service.updateDocumentationLabelPreferences(user, id, dto.labelIds);
+  }
+
+  @Post(':id/manual/share-links')
+  async createManualShareLink(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreateManualShareLinkDto,
+  ) {
+    return this.service.createManualShareLink(user, id, dto.labelIds);
+  }
+
+  @Get(':id/manual/share-links')
+  async listManualShareLinks(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.service.listManualShareLinks(user, id);
+  }
+
+  @Delete(':id/manual/share-links/:linkId')
+  async revokeManualShareLink(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('linkId', new ParseUUIDPipe()) linkId: string,
+  ) {
+    return this.service.revokeManualShareLink(user, id, linkId);
   }
 
   // Gestión de miembros — solo owner

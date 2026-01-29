@@ -299,6 +299,232 @@ export class ProjectsService {
     return result;
   }
 
+  private normalizeLabelIds(ids: string[]) {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const value of ids) {
+      const trimmed = value.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      result.push(trimmed);
+    }
+    return result;
+  }
+
+  private parseLabelsCsv(labelsCsv?: string) {
+    if (!labelsCsv) return [];
+    return this.normalizeLabelIds(labelsCsv.split(','));
+  }
+
+  private async buildManualForViewer(
+    projectId: string,
+    baseLabelIds: string[] | null,
+    labelsCsv?: string,
+    projectOverride?: { id: string; name: string; description: string | null },
+  ) {
+    const project =
+      projectOverride ??
+      (await this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, name: true, description: true },
+      }));
+    if (!project) throw new NotFoundException('Project not found');
+
+    const rawLabelIds = this.parseLabelsCsv(labelsCsv);
+    const baseSet = baseLabelIds ? new Set(baseLabelIds) : null;
+    const querySet = rawLabelIds.length > 0 ? new Set(rawLabelIds) : null;
+
+    const [rawModules, rawFeatures, labels, documentationFields, featureLinkRows] =
+      await this.prisma.$transaction([
+        this.prisma.module.findMany({
+          where: { projectId },
+          select: {
+            id: true,
+            projectId: true,
+            name: true,
+            parentModuleId: true,
+            isRoot: true,
+            sortOrder: true,
+            createdAt: true,
+            publishedVersionId: true,
+          },
+        }),
+        this.prisma.feature.findMany({
+          where: { module: { projectId } },
+          select: {
+            id: true,
+            moduleId: true,
+            name: true,
+            status: true,
+            priority: true,
+            sortOrder: true,
+            createdAt: true,
+            publishedVersionId: true,
+          },
+        }),
+        this.prisma.projectLabel.findMany({
+          where: { projectId },
+          select: {
+            id: true,
+            name: true,
+            isMandatory: true,
+            displayOrder: true,
+            visibleToRoles: true,
+          },
+          orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+        }),
+        this.prisma.documentationField.findMany({
+          where: {
+            projectId,
+            entityType: {
+              in: [
+                DocumentationEntityType.MODULE,
+                DocumentationEntityType.FEATURE,
+                DocumentationEntityType.PROJECT,
+              ],
+            },
+          },
+          select: {
+            labelId: true,
+            entityType: true,
+            moduleId: true,
+            featureId: true,
+            content: true,
+            isNotApplicable: true,
+            updatedAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
+        this.prisma.featureLink.findMany({
+          where: {
+            feature: { module: { projectId } },
+          },
+          include: {
+            feature: {
+              select: {
+                id: true,
+                name: true,
+                module: { select: { id: true, name: true } },
+              },
+            },
+            linkedFeature: {
+              select: {
+                id: true,
+                name: true,
+                module: { select: { id: true, name: true } },
+              },
+            },
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
+      ]);
+
+    const visibleLabels = labels.map((label) => ({
+      id: label.id,
+      name: label.name,
+      isMandatory: label.isMandatory,
+      order: label.displayOrder ?? 0,
+    }));
+
+    let filteredVisibleLabels = visibleLabels;
+    if (baseSet) {
+      filteredVisibleLabels = filteredVisibleLabels.filter((label) => baseSet.has(label.id));
+    }
+    if (querySet) {
+      filteredVisibleLabels = filteredVisibleLabels.filter((label) => querySet.has(label.id));
+    }
+    const visibleLabelMap = new Map(filteredVisibleLabels.map((label) => [label.id, label]));
+
+    const moduleDocs = new Map<string, DocumentationLabelSummary[]>();
+    const featureDocs = new Map<string, DocumentationLabelSummary[]>();
+    const projectDocs: DocumentationLabelSummary[] = [];
+    const featureLinksMap = new Map<string, LinkedFeatureSummary[]>();
+
+    for (const record of documentationFields) {
+      const labelInfo = visibleLabelMap.get(record.labelId);
+      if (!labelInfo) continue;
+      const summary: DocumentationLabelSummary = {
+        labelId: record.labelId,
+        labelName: labelInfo.name,
+        isMandatory: labelInfo.isMandatory,
+        displayOrder: labelInfo.order,
+        content: record.content ?? null,
+        isNotApplicable: record.isNotApplicable,
+        updatedAt: record.updatedAt,
+      };
+      if (record.entityType === DocumentationEntityType.MODULE && record.moduleId) {
+        const list = moduleDocs.get(record.moduleId) ?? [];
+        list.push(summary);
+        moduleDocs.set(record.moduleId, list);
+      } else if (record.entityType === DocumentationEntityType.FEATURE && record.featureId) {
+        const list = featureDocs.get(record.featureId) ?? [];
+        list.push(summary);
+        featureDocs.set(record.featureId, list);
+      } else if (record.entityType === DocumentationEntityType.PROJECT) {
+        projectDocs.push(summary);
+      }
+    }
+
+    const sortDocumentation = (docs: DocumentationLabelSummary[]) =>
+      docs
+        .slice()
+        .sort((a, b) => {
+          if (a.displayOrder !== b.displayOrder) return a.displayOrder - b.displayOrder;
+          return a.labelName.localeCompare(b.labelName);
+        });
+
+    const addLink = (
+      sourceId: string,
+      target: { id: string; name: string; module: { id: string; name: string } },
+      direction: 'references' | 'referenced_by',
+      reason: string | null,
+    ) => {
+      const list = featureLinksMap.get(sourceId) ?? [];
+      list.push({
+        id: target.id,
+        name: target.name,
+        moduleId: target.module.id,
+        moduleName: target.module.name,
+        direction,
+        reason,
+      });
+      featureLinksMap.set(sourceId, list);
+    };
+    for (const link of featureLinkRows) {
+      const linkReason = link.reason ?? null;
+      const firstDirection = link.initiatorFeatureId === link.feature.id ? 'references' : 'referenced_by';
+      const secondDirection =
+        link.initiatorFeatureId === link.linkedFeature.id ? 'references' : 'referenced_by';
+      addLink(link.feature.id, link.linkedFeature, firstDirection, linkReason);
+      addLink(link.linkedFeature.id, link.feature, secondDirection, linkReason);
+    }
+
+    const sortLinkedFeatures = (items: LinkedFeatureSummary[]) =>
+      items
+        .slice()
+        .sort((a, b) => a.moduleName.localeCompare(b.moduleName) || a.name.localeCompare(b.name));
+
+    const modules: ModuleRow[] = rawModules.map((mod) => ({
+      ...mod,
+      documentationLabels: sortDocumentation(moduleDocs.get(mod.id) ?? []),
+    }));
+    const features: FeatureRow[] = rawFeatures.map((feat) => ({
+      ...feat,
+      documentationLabels: sortDocumentation(featureDocs.get(feat.id) ?? []),
+      linkedFeatures: sortLinkedFeatures(featureLinksMap.get(feat.id) ?? []),
+    }));
+
+    const modulesTree = this.buildModuleTree(modules, features);
+
+    return {
+      projectId,
+      description: project.description,
+      documentationLabels: sortDocumentation(projectDocs),
+      modules: modulesTree,
+      project: { id: project.id, name: project.name, description: project.description },
+    };
+  }
+
   /** === Helpers de autorización === */
   private async getProjectOrThrow(id: string) {
     const p = await this.prisma.project.findUnique({ where: { id } });
@@ -688,6 +914,95 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
       documentationLabels: sortDocumentation(projectDocs),
       modules: modulesTree,
     };
+  }
+
+  async getPublicManual(projectId: string, labelsCsv?: string) {
+    return this.buildManualForViewer(projectId, null, labelsCsv);
+  }
+
+  async getSharedManual(linkId: string, labelsCsv?: string) {
+    const link = await this.prisma.manualShareLink.findUnique({
+      where: { id: linkId },
+      select: {
+        id: true,
+        labelIds: true,
+        project: { select: { id: true, name: true, description: true } },
+      },
+    });
+    if (!link) throw new NotFoundException('Link not found');
+    return this.buildManualForViewer(link.project.id, link.labelIds, labelsCsv, link.project);
+  }
+
+  async createManualShareLink(user: AccessTokenPayload, projectId: string, labelIds: string[]) {
+    await this.ensureOwnerOrMaintainer(user.sub, projectId);
+    const normalizedLabelIds = this.normalizeLabelIds(labelIds ?? []);
+    const projectLabels = await this.prisma.projectLabel.findMany({
+      where: { projectId },
+      select: { id: true },
+    });
+    const allowedSet = new Set(projectLabels.map((label) => label.id));
+    const sanitized = normalizedLabelIds.filter((id) => allowedSet.has(id));
+
+    const link = await this.prisma.manualShareLink.create({
+      data: {
+        projectId,
+        createdById: user.sub,
+        labelIds: sanitized,
+      },
+      select: { id: true, labelIds: true, createdAt: true },
+    });
+
+    return {
+      id: link.id,
+      projectId,
+      labelIds: link.labelIds,
+      createdAt: link.createdAt,
+    };
+  }
+
+  async listManualShareLinks(user: AccessTokenPayload, projectId: string) {
+    await this.ensureOwnerOrMaintainer(user.sub, projectId);
+    const [links, labels] = await this.prisma.$transaction([
+      this.prisma.manualShareLink.findMany({
+        where: { projectId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, labelIds: true, createdAt: true },
+      }),
+      this.prisma.projectLabel.findMany({
+        where: { projectId },
+        select: { id: true, name: true, isMandatory: true, displayOrder: true },
+        orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      }),
+    ]);
+
+    const labelInfoMap = new Map(
+      labels.map((label) => [
+        label.id,
+        { id: label.id, name: label.name, isMandatory: label.isMandatory, order: label.displayOrder ?? 0 },
+      ]),
+    );
+    const items = links.map((link) => ({
+      id: link.id,
+      labelIds: link.labelIds,
+      labels: link.labelIds
+        .map((id) => labelInfoMap.get(id))
+        .filter((value): value is VisibleDocumentationLabel => value !== undefined),
+      createdAt: link.createdAt,
+    }));
+
+    return { items };
+  }
+
+  async revokeManualShareLink(user: AccessTokenPayload, projectId: string, linkId: string) {
+    await this.ensureOwnerOrMaintainer(user.sub, projectId);
+    const link = await this.prisma.manualShareLink.findUnique({
+      where: { id: linkId },
+      select: { id: true, projectId: true },
+    });
+    if (!link || link.projectId !== projectId) throw new NotFoundException('Link not found');
+
+    await this.prisma.manualShareLink.delete({ where: { id: linkId } });
+    return { ok: true };
   }
 
   async listVisibleDocumentationLabelsForUser(user: AccessTokenPayload, projectId: string) {

@@ -92,6 +92,7 @@ model User {
   // 🔥 Membresías N:M por proyecto (permisos por proyecto)
   memberships      ProjectMember[]
   projectPreferences UserProjectPreference[]
+  manualShareLinks ManualShareLink[]
   TestRun          TestRun[]
 }
 
@@ -159,9 +160,24 @@ model Project {
   labels           ProjectLabel[]
   documentationEntries DocumentationField[]
   userPreferences  UserProjectPreference[]
+  manualShareLinks ManualShareLink[]
 
   @@unique([ownerId, slug])
   @@index([ownerId])
+}
+
+model ManualShareLink {
+  id          String   @id @default(uuid())
+  projectId   String
+  createdById String
+  labelIds    String[] @default([])
+  createdAt   DateTime @default(now())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User    @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([createdById])
 }
 
 model ProjectMember {
