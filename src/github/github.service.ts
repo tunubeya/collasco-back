@@ -406,8 +406,8 @@ export class GithubService {
   /** ==================== Tokens de PROYECTO (ProjectGithubCredential) ==================== */
 
   private async ensureProjectOwner(userId: string, projectId: string) {
-    const p = await this.prisma.project.findUnique({
-      where: { id: projectId },
+    const p = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null },
       select: { ownerId: true },
     });
     if (!p) throw new NotFoundException('Project not found');

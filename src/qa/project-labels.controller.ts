@@ -20,6 +20,15 @@ export class ProjectLabelsController {
     return this.qaService.listProjectLabels(userId, projectId);
   }
 
+  @Get('deleted')
+  async listDeleted(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.listDeletedProjectLabels(userId, projectId);
+  }
+
   @Post()
   async create(
     @CurrentUser() user: AccessTokenPayload | undefined,
@@ -51,6 +60,16 @@ export class ProjectLabelsController {
     const userId = this.resolveUserId(user);
     await this.qaService.deleteProjectLabel(userId, projectId, labelId);
     return { success: true };
+  }
+
+  @Patch(':labelId/restore')
+  async restore(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('labelId', ParseUUIDPipe) labelId: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.restoreProjectLabel(userId, projectId, labelId);
   }
 
   @Patch(':labelId/order')

@@ -137,8 +137,8 @@ export class ModulesService {
 
   // ===== Helpers de autorización (sin archivos nuevos) =====
   private async requireProjectRole(userId: string, projectId: string, allowed: Allowed) {
-    const project = await this.prisma.project.findUnique({
-      where: { id: projectId },
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null },
       select: { ownerId: true },
     });
     if (!project) throw new NotFoundException('Project not found');
@@ -157,8 +157,8 @@ export class ModulesService {
   }
 
   private async requireModule(user: AccessTokenPayload, moduleId: string, allowed: Allowed) {
-    const mod = await this.prisma.module.findUnique({
-      where: { id: moduleId },
+    const mod = await this.prisma.module.findFirst({
+      where: { id: moduleId, deletedAt: null },
       select: { id: true, projectId: true, parentModuleId: true, sortOrder: true },
     });
     if (!mod) throw new NotFoundException('Module not found');
@@ -175,11 +175,11 @@ export class ModulesService {
       const [moduleMax, featureMax] = await Promise.all([
         client.module.aggregate({
           _max: { sortOrder: true },
-          where: { parentModuleId },
+          where: { parentModuleId, deletedAt: null },
         }),
         client.feature.aggregate({
           _max: { sortOrder: true },
-          where: { moduleId: parentModuleId },
+          where: { moduleId: parentModuleId, deletedAt: null },
         }),
       ]);
       return Math.max(moduleMax._max.sortOrder ?? -1, featureMax._max.sortOrder ?? -1) + 1;
@@ -187,7 +187,7 @@ export class ModulesService {
 
     const moduleMax = await client.module.aggregate({
       _max: { sortOrder: true },
-      where: { projectId, parentModuleId: null },
+      where: { projectId, parentModuleId: null, deletedAt: null },
     });
     return (moduleMax._max.sortOrder ?? -1) + 1;
   }
@@ -200,12 +200,12 @@ export class ModulesService {
   ) {
     if (removedOrder === null) return;
     await tx.module.updateMany({
-      where: { projectId, parentModuleId, sortOrder: { gt: removedOrder } },
+      where: { projectId, parentModuleId, sortOrder: { gt: removedOrder }, deletedAt: null },
       data: { sortOrder: { decrement: 1 } },
     });
     if (parentModuleId) {
       await tx.feature.updateMany({
-        where: { moduleId: parentModuleId, sortOrder: { gt: removedOrder } },
+        where: { moduleId: parentModuleId, sortOrder: { gt: removedOrder }, deletedAt: null },
         data: { sortOrder: { decrement: 1 } },
       });
     }
@@ -247,6 +247,7 @@ export class ModulesService {
       parentModuleId,
       id: { not: moduleId },
       sortOrder: orderFilter,
+      deletedAt: null,
     };
 
     const moduleNeighborPromise = this.prisma.module.findFirst({
@@ -257,7 +258,7 @@ export class ModulesService {
 
     const featureNeighborPromise = parentModuleId
       ? this.prisma.feature.findFirst({
-          where: { moduleId: parentModuleId, sortOrder: orderFilter },
+          where: { moduleId: parentModuleId, sortOrder: orderFilter, deletedAt: null },
           orderBy,
           select: { id: true, sortOrder: true },
         })
@@ -292,7 +293,7 @@ export class ModulesService {
     // Traemos TODO el universo del proyecto (módulos + features) para poder construir el subárbol
     const [modules, features] = await this.prisma.$transaction([
       this.prisma.module.findMany({
-        where: { projectId: mod.projectId },
+        where: { projectId: mod.projectId, deletedAt: null },
         select: {
           id: true,
           projectId: true,
@@ -305,7 +306,7 @@ export class ModulesService {
         },
       }),
       this.prisma.feature.findMany({
-        where: { module: { projectId: mod.projectId } },
+        where: { module: { projectId: mod.projectId, deletedAt: null }, deletedAt: null },
         select: {
           id: true,
           moduleId: true,
@@ -425,7 +426,9 @@ export class ModulesService {
 
     // Validar parent perteneciente al mismo proyecto
     if (dto.parentModuleId) {
-      const parent = await this.prisma.module.findUnique({ where: { id: dto.parentModuleId } });
+      const parent = await this.prisma.module.findFirst({
+        where: { id: dto.parentModuleId, deletedAt: null },
+      });
       if (!parent || parent.projectId !== projectId) {
         throw new ForbiddenException('Invalid parentModuleId');
       }
@@ -447,7 +450,7 @@ export class ModulesService {
       });
 
       const labels = await tx.projectLabel.findMany({
-        where: { projectId, defaultNotApplicable: true },
+        where: { projectId, defaultNotApplicable: true, deletedAt: null },
         select: { id: true },
       });
       if (labels.length > 0) {
@@ -484,6 +487,7 @@ export class ModulesService {
 
     const base = {
       projectId,
+      deletedAt: null,
       ...(parentModuleId !== undefined ? { parentModuleId } : {}),
     };
     const textFilter = text ? { OR: [{ name: text }, { description: text }] } : undefined;
@@ -645,11 +649,11 @@ export class ModulesService {
     asRollback?: boolean,
   ) {
     // estado actual + pins de hijos/features publicados
-    const mod = await this.prisma.module.findUnique({
-      where: { id: moduleId },
+    const mod = await this.prisma.module.findFirst({
+      where: { id: moduleId, deletedAt: null },
       include: {
-        children: { select: { id: true, publishedVersionId: true } },
-        features: { select: { id: true, publishedVersionId: true } },
+        children: { where: { deletedAt: null }, select: { id: true, publishedVersionId: true } },
+        features: { where: { deletedAt: null }, select: { id: true, publishedVersionId: true } },
       },
     });
     if (!mod) throw new NotFoundException('Module not found');
@@ -810,11 +814,10 @@ export class ModulesService {
   ) {
     const { cascade = false, force = false } = opts;
 
-    const mod = await this.prisma.module.findUnique({
-      where: { id: moduleId },
+    const mod = await this.prisma.module.findFirst({
+      where: { id: moduleId, deletedAt: null },
       include: {
         project: { select: { id: true, ownerId: true } },
-        _count: { select: { children: true, features: true } },
       },
     });
 
@@ -822,22 +825,42 @@ export class ModulesService {
 
     await this.requireProjectRole(user.sub, mod.project.id, 'WRITE');
 
-    if (!cascade && (mod._count.children > 0 || mod._count.features > 0)) {
+    if (!cascade) {
+      const [childCount, featureCount] = await this.prisma.$transaction([
+        this.prisma.module.count({
+          where: { parentModuleId: moduleId, deletedAt: null },
+        }),
+        this.prisma.feature.count({
+          where: { moduleId, deletedAt: null },
+        }),
+      ]);
+      if (childCount > 0 || featureCount > 0) {
       throw new ConflictException(
         'Module has children/features. Use ?cascade=true to delete subtree.',
       );
+      }
     }
 
     // Recolectar todo el subárbol (moduleId + descendientes)
-    const allModuleIds = await this.collectModuleSubtreeIds(moduleId);
+    const allModuleIds = cascade
+      ? await this.collectModuleSubtreeIds(moduleId)
+      : [moduleId];
 
     // Si no force, valida que nada publicado exista en el subárbol
     if (!force) {
       const publishedModuleCount = await this.prisma.module.count({
-        where: { id: { in: allModuleIds }, NOT: { publishedVersionId: null } },
+        where: {
+          id: { in: allModuleIds },
+          deletedAt: null,
+          NOT: { publishedVersionId: null },
+        },
       });
       const publishedFeatureCount = await this.prisma.feature.count({
-        where: { moduleId: { in: allModuleIds }, NOT: { publishedVersionId: null } },
+        where: {
+          moduleId: { in: allModuleIds },
+          deletedAt: null,
+          NOT: { publishedVersionId: null },
+        },
       });
       if (publishedModuleCount > 0 || publishedFeatureCount > 0) {
         throw new ConflictException(
@@ -846,40 +869,95 @@ export class ModulesService {
       }
     }
 
+    const deletedAt = new Date();
     await this.prisma.$transaction(async (tx) => {
-      // 1) Borra IssueElements de todas las features del subárbol
-      await tx.issueElement.deleteMany({
-        where: { feature: { moduleId: { in: allModuleIds } } },
+      await tx.feature.updateMany({
+        where: { moduleId: { in: allModuleIds }, deletedAt: null },
+        data: { deletedAt, deletedById: user.sub },
       });
-
-      // 2) Borra FeatureVersions del subárbol
-      await tx.featureVersion.deleteMany({
-        where: { feature: { moduleId: { in: allModuleIds } } },
-      });
-
-      // 3) Borra Features del subárbol
-      await tx.feature.deleteMany({
-        where: { moduleId: { in: allModuleIds } },
-      });
-
-      // 4) Borra ModuleVersions del subárbol
-      await tx.moduleVersion.deleteMany({
-        where: { moduleId: { in: allModuleIds } },
-      });
-
-      // 5) Borra los Modules (cierra de raíz o en bloque; DB se encarga de SetNull en parent)
-      await tx.module.deleteMany({
-        where: { id: { in: allModuleIds } },
+      await tx.module.updateMany({
+        where: { id: { in: allModuleIds }, deletedAt: null },
+        data: { deletedAt, deletedById: user.sub },
       });
     });
 
     return { ok: true, deletedModuleIds: allModuleIds };
   }
 
+  async listDeletedInProject(
+    user: AccessTokenPayload,
+    projectId: string,
+    parentModuleId?: string | null,
+    query?: PaginationDto,
+  ) {
+    await this.requireProjectRole(user.sub, projectId, 'READ');
+
+    const { page, take, skip } = clampPageLimit(query?.page, query?.limit);
+    const orderBy = buildSort(query?.sort) ?? [
+      { deletedAt: 'desc' as const },
+      { createdAt: 'asc' as const },
+    ];
+    const text = like(query?.q);
+
+    const base = {
+      projectId,
+      deletedAt: { not: null },
+      ...(parentModuleId !== undefined ? { parentModuleId } : {}),
+    };
+    const textFilter = text ? { OR: [{ name: text }, { description: text }] } : undefined;
+    const where = textFilter ? { AND: [base, textFilter] } : base;
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.module.findMany({ where, skip, take, orderBy }),
+      this.prisma.module.count({ where }),
+    ]);
+    return { items, total, page, limit: take };
+  }
+
+  async restore(user: AccessTokenPayload, moduleId: string) {
+    const mod = await this.prisma.module.findFirst({
+      where: { id: moduleId },
+      select: { id: true, projectId: true, parentModuleId: true, deletedAt: true },
+    });
+    if (!mod) throw new NotFoundException('Module not found');
+    if (!mod.deletedAt) throw new ConflictException('Module is not deleted');
+
+    await this.requireProjectRole(user.sub, mod.projectId, 'WRITE');
+
+    if (mod.parentModuleId) {
+      const parent = await this.prisma.module.findFirst({
+        where: { id: mod.parentModuleId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!parent) {
+        throw new ConflictException('Parent module is deleted. Restore the parent first.');
+      }
+    }
+
+    const allModuleIds = await this.collectModuleSubtreeIds(moduleId, { includeDeleted: true });
+    const cutoff = mod.deletedAt;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.feature.updateMany({
+        where: { moduleId: { in: allModuleIds }, deletedAt: { gte: cutoff } },
+        data: { deletedAt: null, deletedById: null },
+      });
+      await tx.module.updateMany({
+        where: { id: { in: allModuleIds }, deletedAt: { gte: cutoff } },
+        data: { deletedAt: null, deletedById: null },
+      });
+    });
+
+    return { ok: true, restoredModuleIds: allModuleIds };
+  }
+
   /**
    * BFS para obtener todos los ids (incluye el root moduleId).
    */
-  private async collectModuleSubtreeIds(rootId: string): Promise<string[]> {
+  private async collectModuleSubtreeIds(
+    rootId: string,
+    opts: { includeDeleted?: boolean } = {},
+  ): Promise<string[]> {
     const result: string[] = [];
     let frontier: string[] = [rootId];
 
@@ -888,7 +966,9 @@ export class ModulesService {
 
       // fetch children de esta capa
       const children = await this.prisma.module.findMany({
-        where: { parentModuleId: { in: frontier } },
+        where: opts.includeDeleted
+          ? { parentModuleId: { in: frontier } }
+          : { parentModuleId: { in: frontier }, deletedAt: null },
         select: { id: true },
       });
 

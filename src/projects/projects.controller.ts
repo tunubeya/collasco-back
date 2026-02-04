@@ -53,6 +53,12 @@ export class ProjectsController {
   async mine(@CurrentUser() user: AccessTokenPayload, @Query() query: PaginationDto) {
     return this.service.findMine(user, query);
   }
+
+  // Proyectos borrados (soft delete) donde soy owner o miembro
+  @Get('deleted')
+  async deleted(@CurrentUser() user: AccessTokenPayload, @Query() query: PaginationDto) {
+    return this.service.listDeleted(user, query);
+  }
   // Ver detalle (owner, miembro o público)
   @Get(':id')
   async getOne(
@@ -79,6 +85,14 @@ export class ProjectsController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.service.remove(user, id);
+  }
+
+  @Patch(':id/restore')
+  async restore(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.service.restore(user, id);
   }
 
   @Get(':id/structure')
