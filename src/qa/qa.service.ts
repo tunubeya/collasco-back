@@ -1147,9 +1147,15 @@ export class QaService {
         : scope === 'FEATURE'
           ? { featureId: { not: null } }
           : {};
+    const featureVisibilityFilter =
+      scope === 'PROJECT'
+        ? {}
+        : scope === 'FEATURE'
+          ? { feature: { deletedAt: null } }
+          : { OR: [{ featureId: null }, { feature: { deletedAt: null } }] };
 
     const runs = await this.prisma.testRun.findMany({
-      where: { projectId, ...scopeFilter },
+      where: { projectId, ...scopeFilter, ...featureVisibilityFilter },
       orderBy: { runDate: 'desc' },
       take: limit,
       include: {
@@ -1222,7 +1228,8 @@ export class QaService {
       where: {
         isArchived: false,
         feature: {
-          module: { projectId },
+          deletedAt: null,
+          module: { projectId, deletedAt: null },
         },
       },
       _count: {
@@ -1239,10 +1246,12 @@ export class QaService {
 
     const latestRunPairs = await this.prisma.$queryRaw<
       { featureId: string; id: string }[]
-    >`SELECT DISTINCT ON ("featureId") "id", "featureId"
-      FROM "TestRun"
-      WHERE "projectId" = ${projectId} AND "featureId" IS NOT NULL
-      ORDER BY "featureId", "runDate" DESC`;
+    >`SELECT DISTINCT ON (tr."featureId") tr."id", tr."featureId"
+      FROM "TestRun" tr
+      JOIN "Feature" f ON f."id" = tr."featureId" AND f."deletedAt" IS NULL
+      JOIN "Module" m ON m."id" = f."moduleId" AND m."deletedAt" IS NULL
+      WHERE tr."projectId" = ${projectId} AND tr."featureId" IS NOT NULL
+      ORDER BY tr."featureId", tr."runDate" DESC`;
     const latestRunIds = latestRunPairs.map((pair) => pair.id);
 
     const latestRuns = latestRunIds.length
@@ -1341,7 +1350,11 @@ export class QaService {
       .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature));
 
     const openRunsRaw = await this.prisma.testRun.findMany({
-      where: { projectId, status: TestRunStatus.OPEN },
+      where: {
+        projectId,
+        status: TestRunStatus.OPEN,
+        OR: [{ featureId: null }, { feature: { deletedAt: null } }],
+      },
       orderBy: { runDate: 'desc' },
       include: {
         feature: { select: { id: true, name: true } },
