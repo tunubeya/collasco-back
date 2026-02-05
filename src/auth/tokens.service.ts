@@ -39,9 +39,12 @@ export class TokensService {
 
     // 4) usar callback transaction (todo son PrismaPromises adentro)
     await this.prisma.$transaction(async (tx) => {
-      await tx.userRefreshToken.delete({
+      const deleted = await tx.userRefreshToken.deleteMany({
         where: { id: active.id },
       });
+      if (deleted.count === 0) {
+        throw new Error('Refresh token already used');
+      }
       await tx.userRefreshToken.create({
         data: { userId, tokenHash: newTokenHash },
       });
