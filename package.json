@@ -24,8 +24,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "db:seed": "ts-node --transpile-only prisma/seed.ts",
-    "db:purge-soft-deleted": "ts-node --transpile-only scripts/purge-soft-deleted.ts"
+    "db:seed": "ts-node --transpile-only prisma/seed.ts"
   },
   "lint-staged": {
     "*.{ts,js,json,md,yml,yaml}": [
