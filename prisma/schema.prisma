@@ -94,6 +94,10 @@ model User {
   projectPreferences UserProjectPreference[]
   manualShareLinks ManualShareLink[]
   TestRun          TestRun[]
+  deletedProjects  Project[]          @relation("ProjectDeletedBy")
+  deletedModules   Module[]           @relation("ModuleDeletedBy")
+  deletedFeatures  Feature[]          @relation("FeatureDeletedBy")
+  deletedProjectLabels ProjectLabel[] @relation("ProjectLabelDeletedBy")
 }
 
 model UserRefreshToken {
@@ -161,9 +165,13 @@ model Project {
   documentationEntries DocumentationField[]
   userPreferences  UserProjectPreference[]
   manualShareLinks ManualShareLink[]
+  deletedAt        DateTime?
+  deletedById      String?
+  deletedBy        User?                    @relation("ProjectDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
 
   @@unique([ownerId, slug])
   @@index([ownerId])
+  @@index([deletedAt])
 }
 
 model ManualShareLink {
@@ -221,6 +229,8 @@ model Module {
   updatedAt          DateTime @updatedAt
   lastModifiedById   String?
   publishedVersionId String?
+  deletedAt          DateTime?
+  deletedById        String?
 
   project             Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   parent              Module?            @relation("ModuleChildren", fields: [parentModuleId], references: [id], onDelete: SetNull)
@@ -229,11 +239,13 @@ model Module {
   versions            ModuleVersion[]
   lastModifiedBy      User?              @relation("ModuleLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
   publishedVersion    ModuleVersion?     @relation("ModulePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  deletedBy           User?              @relation("ModuleDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   documentationFields DocumentationField[] @relation("ModuleDocumentation")
 
   @@unique([projectId, parentModuleId, name])
   @@index([publishedVersionId])
   @@index([projectId, parentModuleId, sortOrder])
+  @@index([deletedAt])
 }
 
 model ModuleVersion {
@@ -276,6 +288,8 @@ model Feature {
   lastModifiedById   String?
   publishedVersionId String?
   sortOrder          Int              @default(0)
+  deletedAt          DateTime?
+  deletedById        String?
 
   module             Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
   versions           FeatureVersion[]
@@ -284,6 +298,7 @@ model Feature {
   testRuns           TestRun[]
   lastModifiedBy     User?            @relation("FeatureLastModifiedBy", fields: [lastModifiedById], references: [id], onDelete: SetNull)
   publishedVersion   FeatureVersion?  @relation("FeaturePublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  deletedBy          User?            @relation("FeatureDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   linkedFeatures     FeatureLink[]    @relation("FeatureLink_feature")
   linkedByFeatures   FeatureLink[]    @relation("FeatureLink_linked")
   initiatedLinks     FeatureLink[]    @relation("FeatureLink_initiator")
@@ -293,6 +308,7 @@ model Feature {
   @@index([publishedVersionId])
   @@index([moduleId, priority, status])
   @@index([moduleId, sortOrder])
+  @@index([deletedAt])
 }
 
 model FeatureVersion {
@@ -424,13 +440,17 @@ model ProjectLabel {
   readOnlyRoles  ProjectMemberRole[] @default([])
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
+  deletedAt      DateTime?
+  deletedById    String?
 
   project             Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deletedBy           User?                @relation("ProjectLabelDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   documentationFields DocumentationField[]
 
   @@unique([projectId, name])
   @@index([projectId])
   @@index([projectId, displayOrder])
+  @@index([deletedAt])
 }
 
 model DocumentationField {
