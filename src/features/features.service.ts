@@ -91,8 +91,8 @@ export class FeaturesService {
 
   // ===== Helpers permisos (mismo patrón que ModulesService) =====
   private async requireProjectRole(userId: string, projectId: string, allowed: Allowed) {
-    const p = await this.prisma.project.findUnique({
-      where: { id: projectId },
+    const p = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null },
       select: { ownerId: true },
     });
     if (!p) throw new NotFoundException('Project not found');
@@ -110,8 +110,8 @@ export class FeaturesService {
   }
 
   private async requireModule(user: AccessTokenPayload, moduleId: string, allowed: Allowed) {
-    const mod = await this.prisma.module.findUnique({
-      where: { id: moduleId },
+    const mod = await this.prisma.module.findFirst({
+      where: { id: moduleId, deletedAt: null },
       select: { id: true, projectId: true },
     });
     if (!mod) throw new NotFoundException('Module not found');
@@ -120,8 +120,8 @@ export class FeaturesService {
   }
 
   private async requireFeature(user: AccessTokenPayload, featureId: string, allowed: Allowed) {
-    const feature = await this.prisma.feature.findUnique({
-      where: { id: featureId },
+    const feature = await this.prisma.feature.findFirst({
+      where: { id: featureId, deletedAt: null },
       select: {
         id: true,
         moduleId: true,
@@ -142,11 +142,11 @@ export class FeaturesService {
     const [moduleMax, featureMax] = await Promise.all([
       client.module.aggregate({
         _max: { sortOrder: true },
-        where: { parentModuleId: moduleId },
+        where: { parentModuleId: moduleId, deletedAt: null },
       }),
       client.feature.aggregate({
         _max: { sortOrder: true },
-        where: { moduleId },
+        where: { moduleId, deletedAt: null },
       }),
     ]);
 
@@ -161,11 +161,11 @@ export class FeaturesService {
     if (removedOrder === null) return;
     await Promise.all([
       tx.module.updateMany({
-        where: { parentModuleId: moduleId, sortOrder: { gt: removedOrder } },
+        where: { parentModuleId: moduleId, sortOrder: { gt: removedOrder }, deletedAt: null },
         data: { sortOrder: { decrement: 1 } },
       }),
       tx.feature.updateMany({
-        where: { moduleId, sortOrder: { gt: removedOrder } },
+        where: { moduleId, sortOrder: { gt: removedOrder }, deletedAt: null },
         data: { sortOrder: { decrement: 1 } },
       }),
     ]);
@@ -202,12 +202,12 @@ export class FeaturesService {
 
     const [moduleNeighbor, featureNeighbor] = await Promise.all([
       this.prisma.module.findFirst({
-        where: { parentModuleId: moduleId, sortOrder: orderFilter },
+        where: { parentModuleId: moduleId, sortOrder: orderFilter, deletedAt: null },
         orderBy,
         select: { id: true, sortOrder: true },
       }),
       this.prisma.feature.findFirst({
-        where: { moduleId, sortOrder: orderFilter },
+        where: { moduleId, sortOrder: orderFilter, deletedAt: null },
         orderBy,
         select: { id: true, sortOrder: true },
       }),
@@ -251,7 +251,7 @@ export class FeaturesService {
       });
 
       const labels = await tx.projectLabel.findMany({
-        where: { projectId: mod.projectId, defaultNotApplicable: true },
+        where: { projectId: mod.projectId, defaultNotApplicable: true, deletedAt: null },
         select: { id: true },
       });
       if (labels.length > 0) {
@@ -283,22 +283,29 @@ export class FeaturesService {
       ];
     const text = like(query.q);
 
-    const base = { moduleId };
+    const base = { moduleId, deletedAt: null };
     const textFilter = text ? { OR: [{ name: text }, { description: text }] } : undefined;
     const where = textFilter ? { AND: [base, textFilter] } : base;
 
     const [items, total] = await this.prisma.$transaction([
-      this.prisma.feature.findMany({ where, skip, take, orderBy }),
+      this.prisma.feature.findMany({
+        where,
+        skip,
+        take,
+        orderBy,
+        include: { deletedBy: { select: { id: true, name: true, email: true } } },
+      }),
       this.prisma.feature.count({ where }),
     ]);
+    console.log('[features][deleted] sample', items[0]);
     return { items, total, page, limit: take };
   }
 
   async getOne(user: AccessTokenPayload, featureId: string) {
     await this.requireFeature(user, featureId, 'READ');
     const [feature, linkedFeaturesCount, testCasesCount] = await this.prisma.$transaction([
-      this.prisma.feature.findUnique({
-        where: { id: featureId },
+      this.prisma.feature.findFirst({
+        where: { id: featureId, deletedAt: null },
         include: {
           versions: {
             orderBy: { versionNumber: 'desc' },
@@ -317,7 +324,10 @@ export class FeaturesService {
       }),
       this.prisma.featureLink.count({
         where: {
-          OR: [{ featureId }, { linkedFeatureId: featureId }],
+          OR: [
+            { featureId, linkedFeature: { deletedAt: null } },
+            { linkedFeatureId: featureId, feature: { deletedAt: null } },
+          ],
         },
       }),
       this.prisma.testCase.count({
@@ -412,8 +422,8 @@ export class FeaturesService {
     changelog?: string,
     asRollback?: boolean,
   ) {
-    const f = await this.prisma.feature.findUnique({
-      where: { id: featureId },
+    const f = await this.prisma.feature.findFirst({
+      where: { id: featureId, deletedAt: null },
       select: { name: true, description: true, priority: true, status: true },
     });
     if (!f) throw new NotFoundException('Feature not found');
@@ -685,8 +695,8 @@ export class FeaturesService {
 
     await this.requireFeature(user, featureId, 'WRITE');
 
-    const feature = await this.prisma.feature.findUnique({
-      where: { id: featureId },
+    const feature = await this.prisma.feature.findFirst({
+      where: { id: featureId, deletedAt: null },
       include: {
         module: { select: { project: { select: { id: true, ownerId: true } } } },
       },
@@ -698,13 +708,64 @@ export class FeaturesService {
       throw new ConflictException('Feature is published. Use ?force=true to delete.');
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      // Borra dependencias en orden seguro
-      await tx.issueElement.deleteMany({ where: { featureId } });
-      await tx.featureVersion.deleteMany({ where: { featureId } });
-      await tx.feature.delete({ where: { id: featureId } });
+    await this.prisma.feature.update({
+      where: { id: featureId },
+      data: { deletedAt: new Date(), deletedById: user.sub },
     });
 
     return { ok: true, deletedFeatureId: featureId };
+  }
+
+  async listDeletedInProject(
+    user: AccessTokenPayload,
+    projectId: string,
+    query: PaginationDto,
+  ) {
+    await this.requireProjectRole(user.sub, projectId, 'READ');
+    const { page, take, skip } = clampPageLimit(query.page, query.limit);
+    const orderBy =
+      buildSort(query.sort) ??
+      [
+        { deletedAt: 'desc' as const },
+        { createdAt: 'asc' as const },
+      ];
+    const text = like(query.q);
+
+    const base = {
+      deletedAt: { not: null },
+      module: { projectId },
+    };
+    const textFilter = text ? { OR: [{ name: text }, { description: text }] } : undefined;
+    const where = textFilter ? { AND: [base, textFilter] } : base;
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.feature.findMany({
+        where,
+        skip,
+        take,
+        orderBy,
+        include: { deletedBy: { select: { id: true, name: true, email: true } } },
+      }),
+      this.prisma.feature.count({ where }),
+    ]);
+    return { items, total, page, limit: take };
+  }
+
+  async restore(user: AccessTokenPayload, featureId: string) {
+    const feature = await this.prisma.feature.findFirst({
+      where: { id: featureId },
+      select: { id: true, moduleId: true, deletedAt: true },
+    });
+    if (!feature) throw new NotFoundException('Feature not found');
+    if (!feature.deletedAt) throw new ConflictException('Feature is not deleted');
+
+    await this.requireModule(user, feature.moduleId, 'WRITE');
+
+    await this.prisma.feature.update({
+      where: { id: featureId },
+      data: { deletedAt: null, deletedById: null },
+    });
+
+    return { ok: true, restoredFeatureId: featureId };
   }
 }

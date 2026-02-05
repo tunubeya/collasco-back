@@ -48,6 +48,15 @@ export class FeaturesController {
     return this.service.listInModule(user, moduleId, query);
   }
 
+  @Get('projects/:projectId/features/deleted')
+  async listDeletedInProject(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('projectId', new ParseUUIDPipe()) projectId: string,
+    @Query() query: PaginationDto,
+  ) {
+    return this.service.listDeletedInProject(user, projectId, query);
+  }
+
   // Detalle de feature (con versiones + IssueElement)
   @Get('features/:featureId')
   async getOne(
@@ -86,6 +95,14 @@ export class FeaturesController {
   ) {
     const hardForce = force === 'true';
     return this.service.delete(user, featureId, { force: hardForce });
+  }
+
+  @Patch('features/:featureId/restore')
+  async restore(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('featureId', new ParseUUIDPipe()) featureId: string,
+  ) {
+    return this.service.restore(user, featureId);
   }
 
   // Listar versiones
