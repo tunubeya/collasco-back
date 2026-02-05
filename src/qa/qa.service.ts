@@ -277,7 +277,7 @@ export class QaService {
   async listDeletedProjectLabels(userId: string, projectId: string): Promise<ProjectLabelView[]> {
     await assertProjectRead(this.prisma, userId, projectId);
     const labels = await this.prisma.projectLabel.findMany({
-      where: { projectId, deletedAt: { not: null } },
+      where: { projectId, deletedAt: { not: null } }, 
       orderBy: [{ deletedAt: 'desc' }, { createdAt: 'asc' }],
       include: { deletedBy: { select: { id: true, name: true, email: true } } },
     });
