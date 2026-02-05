@@ -7,6 +7,7 @@ build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test
 ```bash
 $npx prisma generate
 $npx prisma migrate dev -n init
+$npx prisma migrate deploy ////aplicar migracion
 ```
 
 Para ver datos:
