@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   DocumentationEntityType,
   Prisma,
@@ -168,6 +168,8 @@ type ProjectLabelView = {
   visibleToRoles: ProjectMemberRole[];
   readOnlyRoles: ProjectMemberRole[];
   displayOrder: number;
+  deletedAt?: Date | null;
+  deletedBy?: { id: string; name: string | null; email: string } | null;
 };
 
 type DocumentationEntry = {
@@ -219,8 +221,8 @@ export class QaService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getProjectIdByFeature(featureId: string): Promise<string | null> {
-    const feature = await this.prisma.feature.findUnique({
-      where: { id: featureId },
+    const feature = await this.prisma.feature.findFirst({
+      where: { id: featureId, deletedAt: null },
       select: {
         module: {
           select: { projectId: true },
@@ -266,8 +268,18 @@ export class QaService {
   async listProjectLabels(userId: string, projectId: string): Promise<ProjectLabelView[]> {
     await assertProjectRead(this.prisma, userId, projectId);
     const labels = await this.prisma.projectLabel.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    return labels.map((label) => this.mapProjectLabel(label));
+  }
+
+  async listDeletedProjectLabels(userId: string, projectId: string): Promise<ProjectLabelView[]> {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const labels = await this.prisma.projectLabel.findMany({
+      where: { projectId, deletedAt: { not: null } }, 
+      orderBy: [{ deletedAt: 'desc' }, { createdAt: 'asc' }],
+      include: { deletedBy: { select: { id: true, name: true, email: true } } },
     });
     return labels.map((label) => this.mapProjectLabel(label));
   }
@@ -285,7 +297,7 @@ export class QaService {
   ): Promise<ProjectLabelView> {
     await this.assertProjectOwner(userId, projectId);
     const lastLabel = await this.prisma.projectLabel.findFirst({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       orderBy: { displayOrder: 'desc' },
       select: { displayOrder: true },
     });
@@ -320,8 +332,8 @@ export class QaService {
     },
   ): Promise<ProjectLabelView> {
     await this.assertProjectOwner(userId, projectId);
-    const label = await this.prisma.projectLabel.findUnique({
-      where: { id: labelId },
+    const label = await this.prisma.projectLabel.findFirst({
+      where: { id: labelId, deletedAt: null },
       select: { projectId: true, defaultNotApplicable: true },
     });
     if (!label || label.projectId !== projectId) {
@@ -345,20 +357,41 @@ export class QaService {
 
   async deleteProjectLabel(userId: string, projectId: string, labelId: string): Promise<void> {
     await this.assertProjectOwner(userId, projectId);
-    const label = await this.prisma.projectLabel.findUnique({
-      where: { id: labelId },
+    const label = await this.prisma.projectLabel.findFirst({
+      where: { id: labelId, deletedAt: null },
       select: { projectId: true },
     });
     if (!label || label.projectId !== projectId) {
       throw new NotFoundException('Label not found.');
     }
-    await this.prisma.projectLabel.delete({ where: { id: labelId } });
+    await this.prisma.projectLabel.update({
+      where: { id: labelId },
+      data: { deletedAt: new Date(), deletedById: userId },
+    });
+  }
+
+  async restoreProjectLabel(userId: string, projectId: string, labelId: string): Promise<ProjectLabelView> {
+    await this.assertProjectOwner(userId, projectId);
+    const label = await this.prisma.projectLabel.findFirst({
+      where: { id: labelId, projectId },
+    });
+    if (!label) {
+      throw new NotFoundException('Label not found.');
+    }
+    if (!label.deletedAt) {
+      throw new ConflictException('Label is not deleted.');
+    }
+    const restored = await this.prisma.projectLabel.update({
+      where: { id: labelId },
+      data: { deletedAt: null, deletedById: null },
+    });
+    return this.mapProjectLabel(restored);
   }
 
   async reorderProjectLabel(userId: string, projectId: string, labelId: string, newIndex: number): Promise<ProjectLabelView[]> {
     await this.assertProjectOwner(userId, projectId);
     const labels = await this.prisma.projectLabel.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
       select: { id: true },
     });
@@ -380,7 +413,7 @@ export class QaService {
     );
 
     const reordered = await this.prisma.projectLabel.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
     });
     return reordered.map((labelRow) => this.mapProjectLabel(labelRow));
@@ -485,6 +518,8 @@ export class QaService {
     const links = await this.prisma.featureLink.findMany({
       where: {
         OR: [{ featureId }, { linkedFeatureId: featureId }],
+        feature: { deletedAt: null },
+        linkedFeature: { deletedAt: null },
       },
       include: {
         feature: {
@@ -1115,9 +1150,15 @@ export class QaService {
         : scope === 'FEATURE'
           ? { featureId: { not: null } }
           : {};
+    const featureVisibilityFilter =
+      scope === 'PROJECT'
+        ? {}
+        : scope === 'FEATURE'
+          ? { feature: { deletedAt: null } }
+          : { OR: [{ featureId: null }, { feature: { deletedAt: null } }] };
 
     const runs = await this.prisma.testRun.findMany({
-      where: { projectId, ...scopeFilter },
+      where: { projectId, ...scopeFilter, ...featureVisibilityFilter },
       orderBy: { runDate: 'desc' },
       take: limit,
       include: {
@@ -1152,12 +1193,12 @@ export class QaService {
 
   private async buildProjectDashboardData(projectId: string): Promise<ProjectDashboardData> {
     const features = await this.prisma.feature.findMany({
-      where: { module: { projectId } },
+      where: { module: { projectId, deletedAt: null }, deletedAt: null },
       select: { id: true, name: true, description: true, createdAt: true },
       orderBy: { name: 'asc' },
     });
     const modules = await this.prisma.module.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       select: { id: true, name: true, description: true, createdAt: true },
       orderBy: { name: 'asc' },
     });
@@ -1190,7 +1231,8 @@ export class QaService {
       where: {
         isArchived: false,
         feature: {
-          module: { projectId },
+          deletedAt: null,
+          module: { projectId, deletedAt: null },
         },
       },
       _count: {
@@ -1207,10 +1249,12 @@ export class QaService {
 
     const latestRunPairs = await this.prisma.$queryRaw<
       { featureId: string; id: string }[]
-    >`SELECT DISTINCT ON ("featureId") "id", "featureId"
-      FROM "TestRun"
-      WHERE "projectId" = ${projectId} AND "featureId" IS NOT NULL
-      ORDER BY "featureId", "runDate" DESC`;
+    >`SELECT DISTINCT ON (tr."featureId") tr."id", tr."featureId"
+      FROM "TestRun" tr
+      JOIN "Feature" f ON f."id" = tr."featureId" AND f."deletedAt" IS NULL
+      JOIN "Module" m ON m."id" = f."moduleId" AND m."deletedAt" IS NULL
+      WHERE tr."projectId" = ${projectId} AND tr."featureId" IS NOT NULL
+      ORDER BY tr."featureId", tr."runDate" DESC`;
     const latestRunIds = latestRunPairs.map((pair) => pair.id);
 
     const latestRuns = latestRunIds.length
@@ -1309,7 +1353,11 @@ export class QaService {
       .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature));
 
     const openRunsRaw = await this.prisma.testRun.findMany({
-      where: { projectId, status: TestRunStatus.OPEN },
+      where: {
+        projectId,
+        status: TestRunStatus.OPEN,
+        OR: [{ featureId: null }, { feature: { deletedAt: null } }],
+      },
       orderBy: { runDate: 'desc' },
       include: {
         feature: { select: { id: true, name: true } },
@@ -1678,8 +1726,8 @@ export class QaService {
   }
 
   private async getProjectIdByModule(moduleId: string): Promise<string | null> {
-    const module = await this.prisma.module.findUnique({
-      where: { id: moduleId },
+    const module = await this.prisma.module.findFirst({
+      where: { id: moduleId, deletedAt: null },
       select: { projectId: true },
     });
     return module?.projectId ?? null;
@@ -1856,6 +1904,13 @@ export class QaService {
   }
 
   private async getProjectMemberRole(userId: string, projectId: string): Promise<ProjectMemberRole | null> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { deletedAt: true },
+    });
+    if (!project || project.deletedAt) {
+      return null;
+    }
     const membership = await this.prisma.projectMember.findUnique({
       where: { projectId_userId: { projectId, userId } },
       select: { role: true },
@@ -1878,6 +1933,8 @@ export class QaService {
     visibleToRoles: ProjectMemberRole[];
     readOnlyRoles: ProjectMemberRole[];
     displayOrder: number;
+    deletedAt?: Date | null;
+    deletedBy?: { id: string; name: string | null; email: string } | null;
   }): ProjectLabelView {
     return {
       id: label.id,
@@ -1887,6 +1944,8 @@ export class QaService {
       visibleToRoles: label.visibleToRoles ?? [],
       readOnlyRoles: label.readOnlyRoles ?? [],
       displayOrder: label.displayOrder ?? 0,
+      deletedAt: label.deletedAt ?? null,
+      deletedBy: label.deletedBy,
     };
   }
 
@@ -1922,7 +1981,7 @@ export class QaService {
     const { userId, projectId, entityType, entityId } = params;
     const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
     const labels = await this.prisma.projectLabel.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       orderBy: { createdAt: 'asc' },
     });
     const labelViews = labels.map((label) => this.mapProjectLabel(label));
@@ -1959,11 +2018,11 @@ export class QaService {
   private async createDefaultDocumentationForLabel(projectId: string, labelId: string): Promise<void> {
     const [modules, features] = await this.prisma.$transaction([
       this.prisma.module.findMany({
-        where: { projectId },
+        where: { projectId, deletedAt: null },
         select: { id: true },
       }),
       this.prisma.feature.findMany({
-        where: { module: { projectId } },
+        where: { module: { projectId, deletedAt: null }, deletedAt: null },
         select: { id: true },
       }),
     ]);
@@ -2032,8 +2091,8 @@ export class QaService {
   }): Promise<void> {
     const { userId, projectId, entityType, entityId, labelId, dto } = params;
     const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
-    const label = await this.prisma.projectLabel.findUnique({
-      where: { id: labelId },
+    const label = await this.prisma.projectLabel.findFirst({
+      where: { id: labelId, deletedAt: null },
     });
     if (!label || label.projectId !== projectId) {
       throw new BadRequestException('Label not found for this project.');
