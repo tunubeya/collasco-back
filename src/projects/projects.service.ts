@@ -159,7 +159,7 @@ export class ProjectsService {
 
   private async loadVisibleLabelsForRole(projectId: string, role: ProjectMemberRole) {
     const labels = await this.prisma.projectLabel.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       select: {
         id: true,
         name: true,
@@ -320,15 +320,15 @@ export class ProjectsService {
     projectId: string,
     baseLabelIds: string[] | null,
     labelsCsv?: string,
-    projectOverride?: { id: string; name: string; description: string | null },
+    projectOverride?: { id: string; name: string; description: string | null; deletedAt?: Date | null },
   ) {
     const project =
       projectOverride ??
-      (await this.prisma.project.findUnique({
-        where: { id: projectId },
-        select: { id: true, name: true, description: true },
+      (await this.prisma.project.findFirst({
+        where: { id: projectId, deletedAt: null },
+        select: { id: true, name: true, description: true, deletedAt: true },
       }));
-    if (!project) throw new NotFoundException('Project not found');
+    if (!project || project.deletedAt) throw new NotFoundException('Project not found');
 
     const rawLabelIds = this.parseLabelsCsv(labelsCsv);
     const baseSet = baseLabelIds ? new Set(baseLabelIds) : null;
@@ -337,7 +337,7 @@ export class ProjectsService {
     const [rawModules, rawFeatures, labels, documentationFields, featureLinkRows] =
       await this.prisma.$transaction([
         this.prisma.module.findMany({
-          where: { projectId },
+          where: { projectId, deletedAt: null },
           select: {
             id: true,
             projectId: true,
@@ -350,7 +350,7 @@ export class ProjectsService {
           },
         }),
         this.prisma.feature.findMany({
-          where: { module: { projectId } },
+          where: { module: { projectId, deletedAt: null }, deletedAt: null },
           select: {
             id: true,
             moduleId: true,
@@ -363,7 +363,7 @@ export class ProjectsService {
           },
         }),
         this.prisma.projectLabel.findMany({
-          where: { projectId },
+          where: { projectId, deletedAt: null },
           select: {
             id: true,
             name: true,
@@ -397,7 +397,8 @@ export class ProjectsService {
         }),
         this.prisma.featureLink.findMany({
           where: {
-            feature: { module: { projectId } },
+            feature: { module: { projectId, deletedAt: null }, deletedAt: null },
+            linkedFeature: { deletedAt: null },
           },
           include: {
             feature: {
@@ -526,8 +527,10 @@ export class ProjectsService {
   }
 
   /** === Helpers de autorización === */
-  private async getProjectOrThrow(id: string) {
-    const p = await this.prisma.project.findUnique({ where: { id } });
+  private async getProjectOrThrow(id: string, opts: { includeDeleted?: boolean } = {}) {
+    const p = await this.prisma.project.findFirst({
+      where: opts.includeDeleted ? { id } : { id, deletedAt: null },
+    });
     if (!p) throw new NotFoundException('Project not found');
     return p;
   }
@@ -544,14 +547,18 @@ export class ProjectsService {
     return p;
   }
 
-  private async ensureOwner(userId: string, projectId: string) {
-    const p = await this.getProjectOrThrow(projectId);
+  private async ensureOwner(userId: string, projectId: string, opts: { includeDeleted?: boolean } = {}) {
+    const p = await this.getProjectOrThrow(projectId, opts);
     if (p.ownerId !== userId) throw new ForbiddenException('Owner only');
     return p;
   }
 
-  private async ensureOwnerOrMaintainer(userId: string, projectId: string) {
-    const project = await this.getProjectOrThrow(projectId);
+  private async ensureOwnerOrMaintainer(
+    userId: string,
+    projectId: string,
+    opts: { includeDeleted?: boolean } = {},
+  ) {
+    const project = await this.getProjectOrThrow(projectId, opts);
     if (project.ownerId === userId) {
       return { project, role: ProjectMemberRole.OWNER };
     }
@@ -608,7 +615,10 @@ export class ProjectsService {
     const orderBy = buildSort(query.sort) ?? { updatedAt: 'desc' as const };
     const text = like(query.q);
     const accessFilter = {
-      OR: [{ ownerId: user.sub }, { members: { some: { userId: user.sub } } }],
+      AND: [
+        { deletedAt: null },
+        { OR: [{ ownerId: user.sub }, { members: { some: { userId: user.sub } } }] },
+      ],
     };
     const textFilter = text ? { OR: [{ name: text }, { description: text }] } : undefined;
 
@@ -620,6 +630,9 @@ export class ProjectsService {
         skip,
         take,
         orderBy,
+        include: {
+          deletedBy: { select: { id: true, name: true, email: true } },
+        },
       }),
       this.prisma.project.count({ where }),
     ]);
@@ -632,7 +645,7 @@ export class ProjectsService {
 
     const [rawModules, rawFeatures] = await this.prisma.$transaction([
       this.prisma.module.findMany({
-        where: { projectId: { in: projectIds } },
+        where: { projectId: { in: projectIds }, deletedAt: null },
         select: {
           id: true,
           projectId: true,
@@ -645,7 +658,7 @@ export class ProjectsService {
         },
       }),
       this.prisma.feature.findMany({
-        where: { module: { projectId: { in: projectIds } } },
+        where: { module: { projectId: { in: projectIds }, deletedAt: null }, deletedAt: null },
         select: {
           id: true,
           moduleId: true,
@@ -681,8 +694,8 @@ export class ProjectsService {
   async findOne(user: AccessTokenPayload, id: string) {
     const baseProject = await this.ensureCanRead(user, id);
 
-    const project = await this.prisma.project.findUnique({
-      where: { id },
+    const project = await this.prisma.project.findFirst({
+      where: { id, deletedAt: null },
       include: {
         owner: { select: { id: true, email: true, name: true } },
         members: {
@@ -713,42 +726,42 @@ export class ProjectsService {
     const [rawModules, rawFeatures, labels, documentationFields, preference, featureLinkRows] =
       await this.prisma.$transaction([
         this.prisma.module.findMany({
-          where: { projectId },
+          where: { projectId, deletedAt: null },
           select: {
             id: true,
             projectId: true,
-          name: true,
-          parentModuleId: true,
-          isRoot: true,
-          sortOrder: true,
-          createdAt: true,
-          publishedVersionId: true,
-        },
-      }),
-      this.prisma.feature.findMany({
-        where: { module: { projectId } },
-        select: {
-          id: true,
-          moduleId: true,
-          name: true,
-          status: true,
-          priority: true,
-          sortOrder: true,
-          createdAt: true,
-          publishedVersionId: true,
-        },
-      }),
-      this.prisma.projectLabel.findMany({
-        where: { projectId },
-        select: {
-          id: true,
-          name: true,
-          isMandatory: true,
-          displayOrder: true,
-          visibleToRoles: true,
-        },
-        orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
-      }),
+            name: true,
+            parentModuleId: true,
+            isRoot: true,
+            sortOrder: true,
+            createdAt: true,
+            publishedVersionId: true,
+          },
+        }),
+        this.prisma.feature.findMany({
+          where: { module: { projectId, deletedAt: null }, deletedAt: null },
+          select: {
+            id: true,
+            moduleId: true,
+            name: true,
+            status: true,
+            priority: true,
+            sortOrder: true,
+            createdAt: true,
+            publishedVersionId: true,
+          },
+        }),
+        this.prisma.projectLabel.findMany({
+          where: { projectId, deletedAt: null },
+          select: {
+            id: true,
+            name: true,
+            isMandatory: true,
+            displayOrder: true,
+            visibleToRoles: true,
+          },
+          orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+        }),
         this.prisma.documentationField.findMany({
           where: {
             projectId,
@@ -777,7 +790,8 @@ export class ProjectsService {
         }),
         this.prisma.featureLink.findMany({
           where: {
-            feature: { module: { projectId } },
+            feature: { module: { projectId, deletedAt: null }, deletedAt: null },
+            linkedFeature: { deletedAt: null },
           },
           include: {
             feature: {
@@ -809,7 +823,7 @@ export class ProjectsService {
       })),
       viewerRole,
     );
-const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]));
+    const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]));
 
     const rawPreferenceIds = preference?.documentationLabelIds ?? [];
     const preferNone = rawPreferenceIds.length === 0;
@@ -926,7 +940,7 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
       select: {
         id: true,
         labelIds: true,
-        project: { select: { id: true, name: true, description: true } },
+        project: { select: { id: true, name: true, description: true, deletedAt: true } },
       },
     });
     if (!link) throw new NotFoundException('Link not found');
@@ -937,7 +951,7 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
     await this.ensureOwnerOrMaintainer(user.sub, projectId);
     const normalizedLabelIds = this.normalizeLabelIds(labelIds ?? []);
     const projectLabels = await this.prisma.projectLabel.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       select: { id: true },
     });
     const allowedSet = new Set(projectLabels.map((label) => label.id));
@@ -969,7 +983,7 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
         select: { id: true, labelIds: true, createdAt: true },
       }),
       this.prisma.projectLabel.findMany({
-        where: { projectId },
+        where: { projectId, deletedAt: null },
         select: { id: true, name: true, isMandatory: true, displayOrder: true },
         orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
       }),
@@ -1089,8 +1103,83 @@ const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]))
 
   async remove(user: AccessTokenPayload, id: string) {
     await this.ensureOwnerOrMaintainer(user.sub, id);
-    await this.prisma.project.delete({ where: { id } });
-    return { ok: true };
+    const project = await this.getProjectOrThrow(id);
+    const deletedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.project.update({
+        where: { id },
+        data: { deletedAt, deletedById: user.sub },
+      });
+      await tx.module.updateMany({
+        where: { projectId: id, deletedAt: null },
+        data: { deletedAt, deletedById: user.sub },
+      });
+      await tx.feature.updateMany({
+        where: { module: { projectId: id }, deletedAt: null },
+        data: { deletedAt, deletedById: user.sub },
+      });
+      await tx.projectLabel.updateMany({
+        where: { projectId: id, deletedAt: null },
+        data: { deletedAt, deletedById: user.sub },
+      });
+    });
+    return { ok: true, deletedProjectId: project.id };
+  }
+
+  async listDeleted(user: AccessTokenPayload, query: PaginationDto) {
+    const { page, take, skip } = clampPageLimit(query.page, query.limit);
+    const orderBy = buildSort(query.sort) ?? { deletedAt: 'desc' as const };
+    const text = like(query.q);
+    const accessFilter = {
+      AND: [
+        { deletedAt: { not: null } },
+        { OR: [{ ownerId: user.sub }, { members: { some: { userId: user.sub } } }] },
+      ],
+    };
+    const textFilter = text ? { OR: [{ name: text }, { description: text }] } : undefined;
+    const where = textFilter ? { AND: [accessFilter, textFilter] } : accessFilter;
+
+    const [projects, total] = await this.prisma.$transaction([
+      this.prisma.project.findMany({
+        where,
+        skip,
+        take,
+        orderBy,
+      }),
+      this.prisma.project.count({ where }),
+    ]);
+
+    return { items: projects, total, page, limit: take };
+  }
+
+  async restore(user: AccessTokenPayload, id: string) {
+    const project = await this.getProjectOrThrow(id, { includeDeleted: true });
+    if (!project.deletedAt) {
+      throw new ConflictException('Project is not deleted');
+    }
+    await this.ensureOwnerOrMaintainer(user.sub, id, { includeDeleted: true });
+    const cutoff = project.deletedAt;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.project.update({
+        where: { id },
+        data: { deletedAt: null, deletedById: null },
+      });
+      await tx.module.updateMany({
+        where: { projectId: id, deletedAt: { gte: cutoff } },
+        data: { deletedAt: null, deletedById: null },
+      });
+      await tx.feature.updateMany({
+        where: { module: { projectId: id }, deletedAt: { gte: cutoff } },
+        data: { deletedAt: null, deletedById: null },
+      });
+      await tx.projectLabel.updateMany({
+        where: { projectId: id, deletedAt: { gte: cutoff } },
+        data: { deletedAt: null, deletedById: null },
+      });
+    });
+
+    return { ok: true, restoredProjectId: id };
   }
 
   /** === Members (owner-only) === */
