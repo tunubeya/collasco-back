@@ -55,6 +55,17 @@ export class ModulesController {
     return this.service.listInProject(user, projectId, parentParam, query);
   }
 
+  @Get('projects/:projectId/modules/deleted')
+  async listDeletedInProject(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('projectId', new ParseUUIDPipe()) projectId: string,
+    @Query('parent') parent?: string,
+    @Query() query?: PaginationDto,
+  ) {
+    const parentParam = parent === undefined ? undefined : parent === 'null' ? null : parent;
+    return this.service.listDeletedInProject(user, projectId, parentParam, query);
+  }
+
   @Get('modules/:moduleId/structure')
   async getModuleStructure(@CurrentUser() user: AccessTokenPayload, @Param('moduleId') moduleId: string) {
     return this.service.getModuleStructure(user, moduleId);
@@ -98,6 +109,14 @@ export class ModulesController {
     const doCascade = cascade === 'true';
     const hardForce = force === 'true';
     return this.service.delete(user, moduleId, { cascade: doCascade, force: hardForce });
+  }
+
+  @Patch('modules/:moduleId/restore')
+  async restore(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('moduleId', new ParseUUIDPipe()) moduleId: string,
+  ) {
+    return this.service.restore(user, moduleId);
   }
   // Crear snapshot de versión
   @Post('modules/:moduleId/snapshot')
