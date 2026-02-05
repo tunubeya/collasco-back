@@ -630,6 +630,9 @@ export class ProjectsService {
         skip,
         take,
         orderBy,
+        include: {
+          deletedBy: { select: { id: true, name: true, email: true } },
+        },
       }),
       this.prisma.project.count({ where }),
     ]);

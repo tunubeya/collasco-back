@@ -288,9 +288,16 @@ export class FeaturesService {
     const where = textFilter ? { AND: [base, textFilter] } : base;
 
     const [items, total] = await this.prisma.$transaction([
-      this.prisma.feature.findMany({ where, skip, take, orderBy }),
+      this.prisma.feature.findMany({
+        where,
+        skip,
+        take,
+        orderBy,
+        include: { deletedBy: { select: { id: true, name: true, email: true } } },
+      }),
       this.prisma.feature.count({ where }),
     ]);
+    console.log('[features][deleted] sample', items[0]);
     return { items, total, page, limit: take };
   }
 
@@ -732,7 +739,13 @@ export class FeaturesService {
     const where = textFilter ? { AND: [base, textFilter] } : base;
 
     const [items, total] = await this.prisma.$transaction([
-      this.prisma.feature.findMany({ where, skip, take, orderBy }),
+      this.prisma.feature.findMany({
+        where,
+        skip,
+        take,
+        orderBy,
+        include: { deletedBy: { select: { id: true, name: true, email: true } } },
+      }),
       this.prisma.feature.count({ where }),
     ]);
     return { items, total, page, limit: take };

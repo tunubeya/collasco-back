@@ -168,6 +168,8 @@ type ProjectLabelView = {
   visibleToRoles: ProjectMemberRole[];
   readOnlyRoles: ProjectMemberRole[];
   displayOrder: number;
+  deletedAt?: Date | null;
+  deletedBy?: { id: string; name: string | null; email: string } | null;
 };
 
 type DocumentationEntry = {
@@ -277,6 +279,7 @@ export class QaService {
     const labels = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: { not: null } },
       orderBy: [{ deletedAt: 'desc' }, { createdAt: 'asc' }],
+      include: { deletedBy: { select: { id: true, name: true, email: true } } },
     });
     return labels.map((label) => this.mapProjectLabel(label));
   }
@@ -1930,6 +1933,8 @@ export class QaService {
     visibleToRoles: ProjectMemberRole[];
     readOnlyRoles: ProjectMemberRole[];
     displayOrder: number;
+    deletedAt?: Date | null;
+    deletedBy?: { id: string; name: string | null; email: string } | null;
   }): ProjectLabelView {
     return {
       id: label.id,
@@ -1939,6 +1944,8 @@ export class QaService {
       visibleToRoles: label.visibleToRoles ?? [],
       readOnlyRoles: label.readOnlyRoles ?? [],
       displayOrder: label.displayOrder ?? 0,
+      deletedAt: label.deletedAt ?? null,
+      deletedBy: label.deletedBy,
     };
   }
 

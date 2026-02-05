@@ -494,7 +494,13 @@ export class ModulesService {
     const where = textFilter ? { AND: [base, textFilter] } : base;
 
     const [items, total] = await this.prisma.$transaction([
-      this.prisma.module.findMany({ where, skip, take, orderBy }),
+      this.prisma.module.findMany({
+        where,
+        skip,
+        take,
+        orderBy,
+        include: { deletedBy: { select: { id: true, name: true, email: true } } },
+      }),
       this.prisma.module.count({ where }),
     ]);
     return { items, total, page, limit: take };
