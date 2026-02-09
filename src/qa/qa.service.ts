@@ -81,6 +81,7 @@ type TestRunDetail = TestRunRecord & { coverage: RunCoverage };
 type ProjectDashboardMetrics = {
   totalFeatures: number;
   featuresMissingDescription: number;
+  entitiesMissingMandatoryDocumentation: number;
   featuresWithoutTestCases: number;
   featuresWithRuns: number;
   testCoverageRatio: number | null;
@@ -94,8 +95,16 @@ type MissingDescriptionItem = {
   entityType: 'FEATURE' | 'MODULE';
 };
 
+type MissingMandatoryDocumentationItem = {
+  id: string;
+  name: string;
+  entityType: 'FEATURE' | 'MODULE' | 'PROJECT';
+  missingLabels: Array<{ id: string; name: string }>;
+};
+
 type ProjectDashboardReports = {
   featuresMissingDescription: MissingDescriptionItem[];
+  entitiesMissingMandatoryDocumentation: MissingMandatoryDocumentationItem[];
   featuresWithoutTestCases: Array<{ id: string; name: string }>;
   featureCoverage: Array<{
     featureId: string;
@@ -1192,6 +1201,14 @@ export class QaService {
   }
 
   private async buildProjectDashboardData(projectId: string): Promise<ProjectDashboardData> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, name: true, deletedAt: true },
+    });
+    if (!project || project.deletedAt) {
+      throw new NotFoundException('Project not found.');
+    }
+
     const features = await this.prisma.feature.findMany({
       where: { module: { projectId, deletedAt: null }, deletedAt: null },
       select: { id: true, name: true, description: true, createdAt: true },
@@ -1226,6 +1243,99 @@ export class QaService {
     ]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map(({ createdAt, ...item }) => item);
+
+    const mandatoryLabels = await this.prisma.projectLabel.findMany({
+      where: { projectId, isMandatory: true, deletedAt: null },
+      select: { id: true, name: true },
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    const mandatoryLabelIds = mandatoryLabels.map((label) => label.id);
+    const entityMissingMandatoryDocumentation: MissingMandatoryDocumentationItem[] = [];
+
+    if (mandatoryLabelIds.length > 0) {
+      const moduleIds = modules.map((mod) => mod.id);
+      const featureIds = features.map((feat) => feat.id);
+
+      const docFields = await this.prisma.documentationField.findMany({
+        where: {
+          projectId,
+          labelId: { in: mandatoryLabelIds },
+          OR: [
+            { moduleId: { in: moduleIds } },
+            { featureId: { in: featureIds } },
+            { entityType: DocumentationEntityType.PROJECT },
+          ],
+        },
+        select: {
+          labelId: true,
+          moduleId: true,
+          featureId: true,
+          entityType: true,
+          content: true,
+          isNotApplicable: true,
+        },
+      });
+
+      const docMap = new Map<string, { content: string | null; isNotApplicable: boolean }>();
+      for (const doc of docFields) {
+        const key = doc.moduleId
+          ? `MODULE:${doc.moduleId}:${doc.labelId}`
+          : doc.featureId
+            ? `FEATURE:${doc.featureId}:${doc.labelId}`
+            : doc.entityType === DocumentationEntityType.PROJECT
+              ? `PROJECT:${projectId}:${doc.labelId}`
+              : null;
+        if (!key) continue;
+        docMap.set(key, { content: doc.content ?? null, isNotApplicable: doc.isNotApplicable });
+      }
+
+      const isMissingMandatory = (value?: { content: string | null; isNotApplicable: boolean }) => {
+        if (!value) return true;
+        if (value.isNotApplicable) return false;
+        if (!value.content) return true;
+        return value.content.trim().length === 0;
+      };
+
+      const projectMissingLabels = mandatoryLabels.filter((label) =>
+        isMissingMandatory(docMap.get(`PROJECT:${projectId}:${label.id}`)),
+      );
+      if (projectMissingLabels.length > 0) {
+        entityMissingMandatoryDocumentation.push({
+          id: projectId,
+          name: project.name,
+          entityType: 'PROJECT',
+          missingLabels: projectMissingLabels.map((label) => ({ id: label.id, name: label.name })),
+        });
+      }
+
+      for (const mod of modules) {
+        const missingLabels = mandatoryLabels.filter((label) =>
+          isMissingMandatory(docMap.get(`MODULE:${mod.id}:${label.id}`)),
+        );
+        if (missingLabels.length > 0) {
+          entityMissingMandatoryDocumentation.push({
+            id: mod.id,
+            name: mod.name,
+            entityType: 'MODULE',
+            missingLabels: missingLabels.map((label) => ({ id: label.id, name: label.name })),
+          });
+        }
+      }
+
+      for (const feat of features) {
+        const missingLabels = mandatoryLabels.filter((label) =>
+          isMissingMandatory(docMap.get(`FEATURE:${feat.id}:${label.id}`)),
+        );
+        if (missingLabels.length > 0) {
+          entityMissingMandatoryDocumentation.push({
+            id: feat.id,
+            name: feat.name,
+            entityType: 'FEATURE',
+            missingLabels: missingLabels.map((label) => ({ id: label.id, name: label.name })),
+          });
+        }
+      }
+    }
     const featureTestCaseCountsRaw = await this.prisma.testCase.groupBy({
       by: ['featureId'],
       where: {
@@ -1393,6 +1503,7 @@ export class QaService {
       metrics: {
         totalFeatures,
         featuresMissingDescription: featuresMissingDescription.length,
+        entitiesMissingMandatoryDocumentation: entityMissingMandatoryDocumentation.length,
         featuresWithoutTestCases: featuresWithoutTestCases.length,
         featuresWithRuns,
         testCoverageRatio,
@@ -1401,6 +1512,7 @@ export class QaService {
       },
       reports: {
         featuresMissingDescription,
+        entitiesMissingMandatoryDocumentation: entityMissingMandatoryDocumentation,
         featuresWithoutTestCases,
         featureCoverage,
         featureHealth,
@@ -1418,10 +1530,30 @@ export class QaService {
     await assertProjectRead(this.prisma, userId, projectId);
     const data = await this.buildProjectDashboardData(projectId);
     const requestedType = options.filters?.type?.toUpperCase();
-    const filterType = requestedType === 'FEATURE' || requestedType === 'MODULE' ? requestedType : null;
+    const filterType =
+      requestedType === 'FEATURE' || requestedType === 'MODULE' || requestedType === 'PROJECT'
+        ? requestedType
+        : null;
     const items = filterType
       ? data.reports.featuresMissingDescription.filter((item) => item.entityType === filterType)
       : data.reports.featuresMissingDescription;
+    return this.paginateArray(items, options.pagination);
+  }
+
+  async getProjectDashboardMandatoryDocumentationMissing(
+    userId: string,
+    projectId: string,
+    options: ListQueryOptions,
+  ): Promise<PaginatedResult<MissingMandatoryDocumentationItem>> {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const data = await this.buildProjectDashboardData(projectId);
+    const requestedType = options.filters?.type?.toUpperCase();
+    const filterType = requestedType === 'FEATURE' || requestedType === 'MODULE' ? requestedType : null;
+    const items = filterType
+      ? data.reports.entitiesMissingMandatoryDocumentation.filter(
+          (item) => item.entityType === filterType,
+        )
+      : data.reports.entitiesMissingMandatoryDocumentation;
     return this.paginateArray(items, options.pagination);
   }
 

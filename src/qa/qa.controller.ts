@@ -209,6 +209,23 @@ export class QaController {
     return this.qaService.getProjectDashboardFeaturesMissingDescription(userId, projectId, options);
   }
 
+  @Get('projects/:projectId/dashboard/mandatory-documentation-missing')
+  async getProjectDashboardMandatoryDocumentationMissing(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ) {
+    const userId = this.resolveUserId(user);
+    const options = this.resolveListQuery(query);
+    let a = await this.qaService.getProjectDashboardMandatoryDocumentationMissing(
+      userId,
+      projectId,
+      options,
+    );
+    console.log(a);
+    return a;
+  }
+
   @Get('projects/:projectId/dashboard/features-without-testcases')
   async getProjectDashboardFeaturesWithoutTestCases(
     @CurrentUser() user: AccessTokenPayload | undefined,
