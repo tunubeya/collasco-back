@@ -297,7 +297,6 @@ export class FeaturesService {
       }),
       this.prisma.feature.count({ where }),
     ]);
-    console.log('[features][deleted] sample', items[0]);
     return { items, total, page, limit: take };
   }
 
