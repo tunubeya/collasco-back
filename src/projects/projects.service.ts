@@ -1186,17 +1186,28 @@ export class ProjectsService {
   async addMember(
     user: AccessTokenPayload,
     projectId: string,
-    memberUserId: string,
+    memberEmail: string,
     role: ProjectMemberRole = ProjectMemberRole.DEVELOPER,
   ) {
     const p = await this.ensureOwner(user.sub, projectId);
-    if (memberUserId === p.ownerId) {
+    const normalizedEmail = memberEmail.trim().toLowerCase();
+    if (!normalizedEmail) {
+      throw new BadRequestException('Email requerido');
+    }
+    const member = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+    if (member.id === p.ownerId) {
       throw new ConflictException('Owner ya es miembro implícito');
     }
 
     return this.prisma.projectMember.upsert({
-      where: { projectId_userId: { projectId, userId: memberUserId } },
-      create: { projectId, userId: memberUserId, role },
+      where: { projectId_userId: { projectId, userId: member.id } },
+      create: { projectId, userId: member.id, role },
       update: { role },
     });
   }

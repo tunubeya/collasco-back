@@ -162,7 +162,7 @@ export class ProjectsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AddMemberDto,
   ) {
-    return this.service.addMember(user, id, dto.userId, dto.role);
+    return this.service.addMember(user, id, dto.email, dto.role);
   }
   @Patch(':id/members/:userId')
   async updateMemberRole(
