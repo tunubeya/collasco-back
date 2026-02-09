@@ -436,7 +436,7 @@ export class ModulesService {
 
     const nextOrder = await this.nextModuleSortOrder(projectId, dto.parentModuleId ?? null);
 
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       const module = await tx.module.create({
         data: {
           projectId,
@@ -468,6 +468,8 @@ export class ModulesService {
 
       return module;
     });
+    await this.touchProject(projectId);
+    return created;
   }
 
   async listInProject(
@@ -575,10 +577,12 @@ export class ModulesService {
     };
 
     if (parentUpdate === undefined) {
-      return this.prisma.module.update({
+      const updated = await this.prisma.module.update({
         where: { id: moduleId },
         data: baseData,
       });
+      await this.touchModule(moduleId);
+      return updated;
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -593,7 +597,7 @@ export class ModulesService {
         parentUpdate ?? null,
         tx,
       );
-      return tx.module.update({
+      const updated = await tx.module.update({
         where: { id: moduleId },
         data: {
           ...baseData,
@@ -601,6 +605,8 @@ export class ModulesService {
           sortOrder: nextOrder,
         },
       });
+      await this.touchProject(mod.projectId);
+      return updated;
     });
   }
 
@@ -642,6 +648,7 @@ export class ModulesService {
       }
     });
 
+    await this.touchModule(moduleId);
     return { ok: true, moduleId, sortOrder: neighborOrder };
   }
 
@@ -742,7 +749,9 @@ export class ModulesService {
 
   async snapshot(user: AccessTokenPayload, moduleId: string, changelog?: string) {
     await this.requireModule(user, moduleId, 'WRITE');
-    return this.snapshotInternal(moduleId, user.sub, changelog, false);
+    const res = await this.snapshotInternal(moduleId, user.sub, changelog, false);
+    await this.touchModule(moduleId);
+    return res;
   }
 
   async rollback(
@@ -778,6 +787,7 @@ export class ModulesService {
       changelog ?? `Rollback to v${versionNumber}`,
       true,
     );
+    await this.touchModule(moduleId);
     return res;
   }
 
@@ -794,6 +804,7 @@ export class ModulesService {
       where: { id: moduleId },
       data: { publishedVersionId: ver.id, lastModifiedById: user.sub },
     });
+    await this.touchModule(moduleId);
     return { ok: true };
   }
 
@@ -887,6 +898,7 @@ export class ModulesService {
       });
     });
 
+    await this.touchProject(mod.project.id);
     return { ok: true, deletedModuleIds: allModuleIds };
   }
 
@@ -954,6 +966,7 @@ export class ModulesService {
       });
     });
 
+    await this.touchProject(mod.projectId);
     return { ok: true, restoredModuleIds: allModuleIds };
   }
 
@@ -983,6 +996,22 @@ export class ModulesService {
     // El orden no importa porque borramos por deleteMany; si quisieras borrar hoja→raíz una a una,
     // podrías invertir y hacer deletes secuenciales.
     return Array.from(new Set(result));
+  }
+
+  private async touchProject(projectId: string): Promise<void> {
+    await this.prisma.project.update({
+      where: { id: projectId },
+      data: { updatedAt: new Date() },
+    });
+  }
+
+  private async touchModule(moduleId: string): Promise<void> {
+    const mod = await this.prisma.module.update({
+      where: { id: moduleId },
+      data: { updatedAt: new Date() },
+      select: { projectId: true },
+    });
+    await this.touchProject(mod.projectId);
   }
 
   /** Devuelve el árbol publicado resolviendo childrenPins/featurePins recursivamente. */

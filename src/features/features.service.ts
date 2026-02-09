@@ -237,7 +237,7 @@ export class FeaturesService {
 
     const nextOrder = await this.nextSortOrderInModule(moduleId);
 
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       const feature = await tx.feature.create({
         data: {
           moduleId,
@@ -269,6 +269,8 @@ export class FeaturesService {
 
       return feature;
     });
+    await this.touchModule(mod.id);
+    return created;
   }
 
   async listInModule(user: AccessTokenPayload, moduleId: string, query: PaginationDto) {
@@ -360,16 +362,18 @@ export class FeaturesService {
     };
 
     if (!moduleUpdate) {
-      return this.prisma.feature.update({
+      const updated = await this.prisma.feature.update({
         where: { id: featureId },
         data: baseData,
       });
+      await this.touchFeature(featureId);
+      return updated;
     }
 
     return this.prisma.$transaction(async (tx) => {
       await this.compactOrdersAfterFeatureMove(tx, feature.moduleId, feature.sortOrder ?? null);
       const nextOrder = await this.nextSortOrderInModule(moduleUpdate, tx);
-      return tx.feature.update({
+      const updated = await tx.feature.update({
         where: { id: featureId },
         data: {
           ...baseData,
@@ -377,6 +381,9 @@ export class FeaturesService {
           sortOrder: nextOrder,
         },
       });
+      await this.touchModule(feature.moduleId);
+      await this.touchModule(moduleUpdate);
+      return updated;
     });
   }
 
@@ -411,6 +418,7 @@ export class FeaturesService {
       }
     });
 
+    await this.touchFeature(featureId);
     return { ok: true, featureId, sortOrder: neighborOrder };
   }
 
@@ -469,7 +477,9 @@ export class FeaturesService {
 
   async snapshot(user: AccessTokenPayload, featureId: string, changelog?: string) {
     await this.requireFeature(user, featureId, 'WRITE');
-    return this.snapshotInternal(featureId, user.sub, changelog, false);
+    const res = await this.snapshotInternal(featureId, user.sub, changelog, false);
+    await this.touchFeature(featureId);
+    return res;
   }
 
   async rollback(
@@ -499,12 +509,14 @@ export class FeaturesService {
     });
 
     // 2) snapshot (marcado rollback, dedupe si ya existía)
-    return this.snapshotInternal(
+    const res = await this.snapshotInternal(
       featureId,
       user.sub,
       changelog ?? `Rollback to v${versionNumber}`,
       true,
     );
+    await this.touchFeature(featureId);
+    return res;
   }
 
   async publish(user: AccessTokenPayload, featureId: string, versionNumber: number) {
@@ -519,6 +531,7 @@ export class FeaturesService {
       where: { id: featureId },
       data: { publishedVersionId: ver.id, lastModifiedById: user.sub },
     });
+    await this.touchFeature(featureId);
     return { ok: true };
   }
 
@@ -565,7 +578,7 @@ export class FeaturesService {
       prNum = p.number;
     }
 
-    return this.prisma.issueElement.create({
+    const created = await this.prisma.issueElement.create({
       data: {
         featureId,
         githubIssueUrl: dto.githubIssueUrl ?? null,
@@ -578,6 +591,8 @@ export class FeaturesService {
         reviewStatus: dto.reviewStatus ?? null,
       },
     });
+    await this.touchFeature(featureId);
+    return created;
   }
 
   async updateIssue(user: AccessTokenPayload, issueId: string, dto: LinkIssueElementDto) {
@@ -606,7 +621,7 @@ export class FeaturesService {
       prNum = p.number;
     }
 
-    return this.prisma.issueElement.update({
+    const updated = await this.prisma.issueElement.update({
       where: { id: issueId },
       data: {
         githubIssueUrl: dto.githubIssueUrl ?? issue.githubIssueUrl,
@@ -619,6 +634,8 @@ export class FeaturesService {
         reviewStatus: dto.reviewStatus ?? issue.reviewStatus,
       },
     });
+    await this.touchFeature(issue.featureId);
+    return updated;
   }
 
   async unlinkIssue(user: AccessTokenPayload, issueId: string) {
@@ -626,6 +643,7 @@ export class FeaturesService {
     if (!issue) throw new NotFoundException('Issue not found');
     await this.requireFeature(user, issue.featureId, 'WRITE');
     await this.prisma.issueElement.delete({ where: { id: issueId } });
+    await this.touchFeature(issue.featureId);
     return { ok: true };
   }
 
@@ -652,10 +670,12 @@ export class FeaturesService {
       commitHashes = Array.from(set);
     }
 
-    return this.prisma.issueElement.update({
+    const updated = await this.prisma.issueElement.update({
       where: { id: issueId },
       data: { reviewStatus, commitHashes },
     });
+    await this.touchFeature(issue.featureId);
+    return updated;
   }
 
   async syncIssueCommits(user: AccessTokenPayload, issueId: string, opts?: SyncCommitsDto) {
@@ -683,10 +703,12 @@ export class FeaturesService {
       finalShas = finalShas.slice(-opts.limit);
     }
 
-    return this.prisma.issueElement.update({
+    const updated = await this.prisma.issueElement.update({
       where: { id: issueId },
       data: { commitHashes: finalShas },
     });
+    await this.touchFeature(issue.featureId);
+    return updated;
   }
 
   async delete(user: AccessTokenPayload, featureId: string, opts: { force?: boolean } = {}) {
@@ -712,6 +734,7 @@ export class FeaturesService {
       data: { deletedAt: new Date(), deletedById: user.sub },
     });
 
+    await this.touchFeature(featureId);
     return { ok: true, deletedFeatureId: featureId };
   }
 
@@ -765,6 +788,32 @@ export class FeaturesService {
       data: { deletedAt: null, deletedById: null },
     });
 
+    await this.touchFeature(featureId);
     return { ok: true, restoredFeatureId: featureId };
+  }
+
+  private async touchProject(projectId: string): Promise<void> {
+    await this.prisma.project.update({
+      where: { id: projectId },
+      data: { updatedAt: new Date() },
+    });
+  }
+
+  private async touchModule(moduleId: string): Promise<void> {
+    const mod = await this.prisma.module.update({
+      where: { id: moduleId },
+      data: { updatedAt: new Date() },
+      select: { projectId: true },
+    });
+    await this.touchProject(mod.projectId);
+  }
+
+  private async touchFeature(featureId: string): Promise<void> {
+    const feature = await this.prisma.feature.update({
+      where: { id: featureId },
+      data: { updatedAt: new Date() },
+      select: { moduleId: true },
+    });
+    await this.touchModule(feature.moduleId);
   }
 }

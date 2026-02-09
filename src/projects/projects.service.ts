@@ -585,6 +585,13 @@ export class ProjectsService {
     return parsed; // { owner, repo }
   }
 
+  private async touchProject(projectId: string): Promise<void> {
+    await this.prisma.project.update({
+      where: { id: projectId },
+      data: { updatedAt: new Date() },
+    });
+  }
+
   /** === CRUD proyecto === */
   async create(user: AccessTokenPayload, dto: CreateProjectDto) {
     if (dto.repositoryUrl) {
@@ -966,6 +973,7 @@ export class ProjectsService {
       select: { id: true, labelIds: true, createdAt: true },
     });
 
+    await this.touchProject(projectId);
     return {
       id: link.id,
       projectId,
@@ -1016,6 +1024,7 @@ export class ProjectsService {
     if (!link || link.projectId !== projectId) throw new NotFoundException('Link not found');
 
     await this.prisma.manualShareLink.delete({ where: { id: linkId } });
+    await this.touchProject(projectId);
     return { ok: true };
   }
 
@@ -1066,6 +1075,7 @@ export class ProjectsService {
       },
     });
 
+    await this.touchProject(projectId);
     return { projectId, availableLabels, selectedLabelIds: sanitizedIds };
   }
 
@@ -1205,11 +1215,13 @@ export class ProjectsService {
       throw new ConflictException('Owner ya es miembro implícito');
     }
 
-    return this.prisma.projectMember.upsert({
+    const result = await this.prisma.projectMember.upsert({
       where: { projectId_userId: { projectId, userId: member.id } },
       create: { projectId, userId: member.id, role },
       update: { role },
     });
+    await this.touchProject(projectId);
+    return result;
   }
 
   async updateMemberRole(
@@ -1223,10 +1235,12 @@ export class ProjectsService {
       throw new ConflictException('No puedes cambiar el rol del owner');
     }
 
-    return this.prisma.projectMember.update({
+    const result = await this.prisma.projectMember.update({
       where: { projectId_userId: { projectId, userId: memberUserId } },
       data: { role },
     });
+    await this.touchProject(projectId);
+    return result;
   }
 
   async removeMember(user: AccessTokenPayload, projectId: string, memberUserId: string) {
@@ -1238,6 +1252,7 @@ export class ProjectsService {
     await this.prisma.projectMember.delete({
       where: { projectId_userId: { projectId, userId: memberUserId } },
     });
+    await this.touchProject(projectId);
     return { ok: true };
   }
 
@@ -1276,7 +1291,7 @@ export class ProjectsService {
   ) {
     await this.ensureOwner(user.sub, projectId);
 
-    return this.prisma.projectGithubCredential.upsert({
+    const credential = await this.prisma.projectGithubCredential.upsert({
       where: { projectId },
       create: {
         projectId,
@@ -1294,6 +1309,8 @@ export class ProjectsService {
         expiresAt: dto.expiresAt ?? null,
       },
     });
+    await this.touchProject(projectId);
+    return credential;
   }
 
   async deleteProjectGithubCredential(user: AccessTokenPayload, projectId: string) {
@@ -1303,6 +1320,7 @@ export class ProjectsService {
     } catch {
       // idempotente
     }
+    await this.touchProject(projectId);
     return { ok: true };
   }
 }

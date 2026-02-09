@@ -255,6 +255,7 @@ export class QaService {
       skipDuplicates: true,
     });
 
+    await this.touchFeature(featureId);
     return this.prisma.testCase.findMany({
       where: { featureId, isArchived: false },
       orderBy: { createdAt: 'asc' },
@@ -325,6 +326,7 @@ export class QaService {
     if (created.defaultNotApplicable) {
       await this.createDefaultDocumentationForLabel(projectId, created.id);
     }
+    await this.touchProject(projectId);
     return this.mapProjectLabel(created);
   }
 
@@ -361,6 +363,7 @@ export class QaService {
     if (dto.defaultNotApplicable === true && !label.defaultNotApplicable) {
       await this.createDefaultDocumentationForLabel(projectId, labelId);
     }
+    await this.touchProject(projectId);
     return this.mapProjectLabel(updated);
   }
 
@@ -377,6 +380,7 @@ export class QaService {
       where: { id: labelId },
       data: { deletedAt: new Date(), deletedById: userId },
     });
+    await this.touchProject(projectId);
   }
 
   async restoreProjectLabel(userId: string, projectId: string, labelId: string): Promise<ProjectLabelView> {
@@ -394,6 +398,7 @@ export class QaService {
       where: { id: labelId },
       data: { deletedAt: null, deletedById: null },
     });
+    await this.touchProject(projectId);
     return this.mapProjectLabel(restored);
   }
 
@@ -425,6 +430,7 @@ export class QaService {
       where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
     });
+    await this.touchProject(projectId);
     return reordered.map((labelRow) => this.mapProjectLabel(labelRow));
   }
 
@@ -620,6 +626,8 @@ export class QaService {
       },
     });
 
+    await this.touchFeature(featureId);
+    await this.touchFeature(targetFeatureId);
     return this.listLinkedFeatures(userId, featureId);
   }
 
@@ -712,6 +720,8 @@ export class QaService {
       });
     }
 
+    await this.touchFeature(featureId);
+    await this.touchFeature(targetFeatureId);
     return this.listLinkedFeatures(userId, featureId);
   }
 
@@ -736,6 +746,8 @@ export class QaService {
     if (result.count === 0) {
       throw new NotFoundException('Linked feature relationship not found.');
     }
+    await this.touchFeature(featureId);
+    await this.touchFeature(linkedFeatureId);
     return this.listLinkedFeatures(userId, featureId);
   }
 
@@ -756,10 +768,12 @@ export class QaService {
     if (dto.expected !== undefined) data.expected = dto.expected;
     if (dto.isArchived !== undefined) data.isArchived = dto.isArchived;
 
-    return this.prisma.testCase.update({
+    const updated = await this.prisma.testCase.update({
       where: { id: testCaseId },
       data,
     });
+    await this.touchFeature(testCase.featureId);
+    return updated;
   }
 
   async createTestRun(
@@ -813,6 +827,7 @@ export class QaService {
       });
     }
 
+    await this.touchFeature(featureId);
     return this.getTestRunDetail(run.id);
   }
   async createProjectTestRun(
@@ -869,6 +884,7 @@ export class QaService {
       skipDuplicates: true,
     });
 
+    await this.touchProject(projectId);
     return this.getTestRunDetail(run.id);
   }
 
@@ -1028,6 +1044,11 @@ export class QaService {
       });
     }
 
+    if (run.featureId) {
+      await this.touchFeature(run.featureId);
+    } else {
+      await this.touchProject(run.projectId);
+    }
     return this.getTestRunDetail(runId);
   }
 
@@ -1102,6 +1123,11 @@ export class QaService {
       }
     }
 
+    if (run.featureId) {
+      await this.touchFeature(run.featureId);
+    } else {
+      await this.touchProject(run.projectId);
+    }
     return this.getTestRunDetail(runId);
   }
 
@@ -2050,6 +2076,31 @@ export class QaService {
     return membership?.role ?? null;
   }
 
+  private async touchProject(projectId: string): Promise<void> {
+    await this.prisma.project.update({
+      where: { id: projectId },
+      data: { updatedAt: new Date() },
+    });
+  }
+
+  private async touchModule(moduleId: string): Promise<void> {
+    const mod = await this.prisma.module.update({
+      where: { id: moduleId },
+      data: { updatedAt: new Date() },
+      select: { projectId: true },
+    });
+    await this.touchProject(mod.projectId);
+  }
+
+  private async touchFeature(featureId: string): Promise<void> {
+    const feature = await this.prisma.feature.update({
+      where: { id: featureId },
+      data: { updatedAt: new Date() },
+      select: { moduleId: true },
+    });
+    await this.touchModule(feature.moduleId);
+  }
+
   private async assertProjectOwner(userId: string, projectId: string): Promise<void> {
     const role = await this.getProjectMemberRole(userId, projectId);
     if (role !== ProjectMemberRole.OWNER) {
@@ -2211,6 +2262,15 @@ export class QaService {
     if (writes.length > 0) {
       await this.prisma.$transaction(writes);
     }
+    await this.prisma.module.updateMany({
+      where: { projectId, deletedAt: null },
+      data: { updatedAt: new Date() },
+    });
+    await this.prisma.feature.updateMany({
+      where: { module: { projectId, deletedAt: null }, deletedAt: null },
+      data: { updatedAt: new Date() },
+    });
+    await this.touchProject(projectId);
   }
 
   private async upsertDocumentationField(params: {
@@ -2262,6 +2322,13 @@ export class QaService {
         where: { id: existing.id },
         data,
       });
+      if (entityType === DocumentationEntityType.FEATURE) {
+        await this.touchFeature(entityId);
+      } else if (entityType === DocumentationEntityType.MODULE) {
+        await this.touchModule(entityId);
+      } else {
+        await this.touchProject(projectId);
+      }
       return;
     }
 
@@ -2280,6 +2347,13 @@ export class QaService {
         isNotApplicable: dto.isNotApplicable ?? false,
       },
     });
+    if (entityType === DocumentationEntityType.FEATURE) {
+      await this.touchFeature(entityId);
+    } else if (entityType === DocumentationEntityType.MODULE) {
+      await this.touchModule(entityId);
+    } else {
+      await this.touchProject(projectId);
+    }
   }
 
   private async getProjectMemberRoleOrThrow(userId: string, projectId: string): Promise<ProjectMemberRole> {
