@@ -32,6 +32,7 @@
     ]
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.19.0",
     "@nestjs/common": "^11.1.6",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.6",
@@ -40,6 +41,7 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/swagger": "^11.2.0",
     "@nestjs/throttler": "^6.4.0",
+    "@types/multer": "^1.4.12",
     "@octokit/rest": "^22.0.0",
     "@prisma/client": "^6.13.0",
     "bcryptjs": "^3.0.2",

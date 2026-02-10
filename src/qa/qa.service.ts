@@ -7,6 +7,7 @@ import {
   TestRunStatus,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { GoogleCloudStorageService } from 'src/google-cloud-storage/google-cloud-storage.service';
 import { CreateTestCasesDto } from './dto/create-test-cases.dto';
 import { UpdateTestCaseDto } from './dto/update-test-case.dto';
 import { CreateTestRunDto, TestResultInput } from './dto/create-test-run.dto';
@@ -77,6 +78,16 @@ type TestRunRecord = Prisma.TestRunGetPayload<{
 }>;
 
 type TestRunDetail = TestRunRecord & { coverage: RunCoverage };
+type DocumentationImageResponse = {
+  labelId: string;
+  images: Array<{
+    id: string;
+    name: string;
+    url: string;
+    createdAt: Date;
+    createdBy: { id: string; name: string | null; email: string } | null;
+  }>;
+};
 
 type ProjectDashboardMetrics = {
   totalFeatures: number;
@@ -227,7 +238,10 @@ export class QaService {
     ProjectMemberRole.DEVELOPER,
   ]);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly googleCloudStorage: GoogleCloudStorageService,
+  ) {}
 
   async getProjectIdByFeature(featureId: string): Promise<string | null> {
     const feature = await this.prisma.feature.findFirst({
@@ -520,6 +534,218 @@ export class QaService {
       dto,
     });
     return this.listModuleDocumentation(userId, moduleId);
+  }
+
+  async listDocumentationImages(
+    userId: string,
+    entityTypeRaw: string,
+    entityId: string,
+    labelId?: string,
+  ): Promise<{ items: DocumentationImageResponse[] }> {
+    const entityType = this.parseDocumentationEntityType(entityTypeRaw);
+    const projectId = await this.resolveDocumentationEntityProjectId(entityType, entityId);
+    await assertProjectRead(this.prisma, userId, projectId);
+
+    const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const labels = await this.prisma.projectLabel.findMany({
+      where: { projectId, deletedAt: null },
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    const labelViews = labels.map((label) => this.mapProjectLabel(label));
+    const visibleLabels = labelViews.filter((label) => this.canViewLabel(role, label));
+
+    if (labelId) {
+      const labelView = labelViews.find((label) => label.id === labelId);
+      if (!labelView || labelView.deletedAt) {
+        throw new BadRequestException('Label not found for this project.');
+      }
+      if (!this.canViewLabel(role, labelView)) {
+        throw new ForbiddenException('You cannot use this label.');
+      }
+    }
+
+    const filterLabelIds = labelId ? [labelId] : visibleLabels.map((label) => label.id);
+    if (filterLabelIds.length === 0) {
+      return { items: [] };
+    }
+
+    const images = await this.prisma.documentationImage.findMany({
+      where: {
+        projectId,
+        entityType,
+        entityId,
+        labelId: labelId ? labelId : { in: filterLabelIds },
+      },
+      orderBy: [{ labelId: 'asc' }, { createdAt: 'asc' }],
+      include: {
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    const imagesByLabel = new Map<string, DocumentationImageResponse['images']>();
+    for (const image of images) {
+      if (!imagesByLabel.has(image.labelId)) {
+        imagesByLabel.set(image.labelId, []);
+      }
+      imagesByLabel.get(image.labelId)?.push({
+        id: image.id,
+        name: image.name,
+        url: image.url,
+        createdAt: image.createdAt,
+        createdBy: image.createdBy ?? null,
+      });
+    }
+
+    const items = (labelId ? labelViews : visibleLabels)
+      .filter((label) => imagesByLabel.has(label.id))
+      .map((label) => ({
+        labelId: label.id,
+        images: imagesByLabel.get(label.id) ?? [],
+      }));
+
+    return { items };
+  }
+
+  async uploadDocumentationImage(
+    userId: string,
+    entityTypeRaw: string,
+    entityId: string,
+    labelId: string,
+    file: Express.Multer.File,
+    name?: string,
+  ): Promise<{
+    id: string;
+    name: string;
+    url: string;
+    labelId: string;
+    entityType: DocumentationEntityType;
+    entityId: string;
+  }> {
+    const entityType = this.parseDocumentationEntityType(entityTypeRaw);
+    const trimmedName = name?.trim();
+    if (!trimmedName) {
+      throw new BadRequestException('Name is required.');
+    }
+    if (!file) {
+      throw new BadRequestException('File is required.');
+    }
+
+    const projectId = await this.resolveDocumentationEntityProjectId(entityType, entityId);
+    await assertProjectWrite(this.prisma, userId, projectId);
+
+    const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const label = await this.prisma.projectLabel.findFirst({
+      where: { id: labelId, deletedAt: null },
+    });
+    if (!label || label.projectId !== projectId) {
+      throw new BadRequestException('Label not found for this project.');
+    }
+    const labelView = this.mapProjectLabel(label);
+    if (!this.canViewLabel(role, labelView)) {
+      throw new ForbiddenException('You cannot use this label.');
+    }
+    if (!this.canEditLabel(role, labelView)) {
+      throw new ForbiddenException('You do not have permission to edit this label.');
+    }
+
+    const existing = await this.prisma.documentationImage.findFirst({
+      where: { projectId, entityType, entityId, labelId, name: trimmedName },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException('Image name already exists for this label.');
+    }
+
+    const url = await this.googleCloudStorage.uploadFile(file);
+    const created = await this.prisma.documentationImage.create({
+      data: {
+        projectId,
+        entityType,
+        entityId,
+        labelId,
+        name: trimmedName,
+        url,
+        createdById: userId,
+      },
+      select: {
+        id: true,
+        name: true,
+        url: true,
+        labelId: true,
+        entityType: true,
+        entityId: true,
+      },
+    });
+
+    if (entityType === DocumentationEntityType.FEATURE) {
+      await this.touchFeature(entityId);
+    } else if (entityType === DocumentationEntityType.MODULE) {
+      await this.touchModule(entityId);
+    } else {
+      await this.touchProject(projectId);
+    }
+
+    return created;
+  }
+
+  async deleteDocumentationImage(
+    userId: string,
+    entityTypeRaw: string,
+    entityId: string,
+    imageId: string,
+  ): Promise<{ ok: true }> {
+    const entityType = this.parseDocumentationEntityType(entityTypeRaw);
+    const projectId = await this.resolveDocumentationEntityProjectId(entityType, entityId);
+    await assertProjectWrite(this.prisma, userId, projectId);
+
+    const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const image = await this.prisma.documentationImage.findFirst({
+      where: {
+        id: imageId,
+        projectId,
+        entityType,
+        entityId,
+      },
+      include: {
+        label: {
+          select: {
+            id: true,
+            name: true,
+            isMandatory: true,
+            defaultNotApplicable: true,
+            visibleToRoles: true,
+            readOnlyRoles: true,
+            displayOrder: true,
+            deletedAt: true,
+            deletedBy: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+    });
+    if (!image || !image.label || image.label.deletedAt) {
+      throw new NotFoundException('Image not found.');
+    }
+
+    const labelView = this.mapProjectLabel(image.label);
+    if (!this.canViewLabel(role, labelView)) {
+      throw new ForbiddenException('You cannot use this label.');
+    }
+    if (!this.canEditLabel(role, labelView)) {
+      throw new ForbiddenException('You do not have permission to edit this label.');
+    }
+
+    await this.googleCloudStorage.deleteFile(image.url);
+    await this.prisma.documentationImage.delete({ where: { id: image.id } });
+
+    if (entityType === DocumentationEntityType.FEATURE) {
+      await this.touchFeature(entityId);
+    } else if (entityType === DocumentationEntityType.MODULE) {
+      await this.touchModule(entityId);
+    } else {
+      await this.touchProject(projectId);
+    }
+
+    return { ok: true };
   }
 
   async listLinkedFeatures(
@@ -2074,6 +2300,55 @@ export class QaService {
       select: { role: true },
     });
     return membership?.role ?? null;
+  }
+
+  private parseDocumentationEntityType(entityTypeRaw: string): DocumentationEntityType {
+    const normalized = entityTypeRaw?.trim().toUpperCase();
+    const singular = normalized?.endsWith('S') ? normalized.slice(0, -1) : normalized;
+    if (singular === DocumentationEntityType.PROJECT) {
+      return DocumentationEntityType.PROJECT;
+    }
+    if (singular === DocumentationEntityType.MODULE) {
+      return DocumentationEntityType.MODULE;
+    }
+    if (singular === DocumentationEntityType.FEATURE) {
+      return DocumentationEntityType.FEATURE;
+    }
+    throw new BadRequestException('Invalid entityType.');
+  }
+
+  private async resolveDocumentationEntityProjectId(
+    entityType: DocumentationEntityType,
+    entityId: string,
+  ): Promise<string> {
+    if (entityType === DocumentationEntityType.PROJECT) {
+      const project = await this.prisma.project.findUnique({
+        where: { id: entityId },
+        select: { deletedAt: true },
+      });
+      if (!project || project.deletedAt) {
+        throw new NotFoundException('Project not found.');
+      }
+      return entityId;
+    }
+    if (entityType === DocumentationEntityType.MODULE) {
+      const module = await this.prisma.module.findFirst({
+        where: { id: entityId, deletedAt: null },
+        select: { projectId: true },
+      });
+      if (!module) {
+        throw new NotFoundException('Module not found.');
+      }
+      return module.projectId;
+    }
+    const feature = await this.prisma.feature.findFirst({
+      where: { id: entityId, deletedAt: null, module: { deletedAt: null } },
+      select: { module: { select: { projectId: true } } },
+    });
+    if (!feature) {
+      throw new NotFoundException('Feature not found.');
+    }
+    return feature.module.projectId;
   }
 
   private async touchProject(projectId: string): Promise<void> {

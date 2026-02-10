@@ -1,4 +1,17 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Put } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { AccessTokenPayload } from 'src/auth/types/jwt-payload';
 import { CurrentUser } from 'src/auth/current-user.decorator';
 import { QaService } from './qa.service';
@@ -66,6 +79,42 @@ export class DocumentationController {
   ) {
     const userId = this.resolveUserId(user);
     return this.qaService.upsertModuleDocumentation(userId, moduleId, labelId, dto);
+  }
+
+  @Get(':entityType/:entityId/documentation/images')
+  async listDocumentationImages(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('entityType') entityType: string,
+    @Param('entityId', ParseUUIDPipe) entityId: string,
+    @Query('labelId') labelId?: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.listDocumentationImages(userId, entityType, entityId, labelId);
+  }
+
+  @UseInterceptors(FileInterceptor('file'))
+  @Post(':entityType/:entityId/documentation/:labelId/images')
+  async uploadDocumentationImage(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('entityType') entityType: string,
+    @Param('entityId', ParseUUIDPipe) entityId: string,
+    @Param('labelId', ParseUUIDPipe) labelId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('name') name?: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.uploadDocumentationImage(userId, entityType, entityId, labelId, file, name);
+  }
+
+  @Delete(':entityType/:entityId/documentation/images/:imageId')
+  async deleteDocumentationImage(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('entityType') entityType: string,
+    @Param('entityId', ParseUUIDPipe) entityId: string,
+    @Param('imageId', ParseUUIDPipe) imageId: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.deleteDocumentationImage(userId, entityType, entityId, imageId);
   }
 
   private resolveUserId(user: AccessTokenPayload | undefined): string {

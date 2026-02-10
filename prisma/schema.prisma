@@ -98,6 +98,7 @@ model User {
   deletedModules   Module[]           @relation("ModuleDeletedBy")
   deletedFeatures  Feature[]          @relation("FeatureDeletedBy")
   deletedProjectLabels ProjectLabel[] @relation("ProjectLabelDeletedBy")
+  createdDocumentationImages DocumentationImage[] @relation("DocumentationImageCreatedBy")
 }
 
 model UserRefreshToken {
@@ -165,6 +166,7 @@ model Project {
   documentationEntries DocumentationField[]
   userPreferences  UserProjectPreference[]
   manualShareLinks ManualShareLink[]
+  documentationImages DocumentationImage[]
   deletedAt        DateTime?
   deletedById      String?
   deletedBy        User?                    @relation("ProjectDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
@@ -446,11 +448,33 @@ model ProjectLabel {
   project             Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   deletedBy           User?                @relation("ProjectLabelDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   documentationFields DocumentationField[]
+  documentationImages DocumentationImage[]
 
   @@unique([projectId, name])
   @@index([projectId])
   @@index([projectId, displayOrder])
   @@index([deletedAt])
+}
+
+model DocumentationImage {
+  id          String                  @id @default(uuid())
+  projectId   String
+  entityType  DocumentationEntityType
+  entityId    String
+  labelId     String
+  name        String
+  url         String
+  createdAt   DateTime                @default(now())
+  createdById String?
+
+  project   Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  label     ProjectLabel  @relation(fields: [labelId], references: [id], onDelete: Cascade)
+  createdBy User?         @relation("DocumentationImageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([entityType, entityId, labelId, name])
+  @@index([projectId])
+  @@index([labelId])
+  @@index([entityType, entityId])
 }
 
 model DocumentationField {
