@@ -954,7 +954,12 @@ export class ProjectsService {
     return this.buildManualForViewer(link.project.id, link.labelIds, labelsCsv, link.project);
   }
 
-  async createManualShareLink(user: AccessTokenPayload, projectId: string, labelIds: string[]) {
+  async createManualShareLink(
+    user: AccessTokenPayload,
+    projectId: string,
+    labelIds: string[],
+    comment?: string,
+  ) {
     await this.ensureOwnerOrMaintainer(user.sub, projectId);
     const normalizedLabelIds = this.normalizeLabelIds(labelIds ?? []);
     const projectLabels = await this.prisma.projectLabel.findMany({
@@ -969,8 +974,9 @@ export class ProjectsService {
         projectId,
         createdById: user.sub,
         labelIds: sanitized,
+        comment: comment?.trim() || null,
       },
-      select: { id: true, labelIds: true, createdAt: true },
+      select: { id: true, labelIds: true, comment: true, createdAt: true },
     });
 
     await this.touchProject(projectId);
@@ -978,6 +984,7 @@ export class ProjectsService {
       id: link.id,
       projectId,
       labelIds: link.labelIds,
+      comment: link.comment,
       createdAt: link.createdAt,
     };
   }
@@ -988,7 +995,7 @@ export class ProjectsService {
       this.prisma.manualShareLink.findMany({
         where: { projectId },
         orderBy: { createdAt: 'desc' },
-        select: { id: true, labelIds: true, createdAt: true },
+        select: { id: true, labelIds: true, comment: true, createdAt: true },
       }),
       this.prisma.projectLabel.findMany({
         where: { projectId, deletedAt: null },
@@ -1009,6 +1016,7 @@ export class ProjectsService {
       labels: link.labelIds
         .map((id) => labelInfoMap.get(id))
         .filter((value): value is VisibleDocumentationLabel => value !== undefined),
+      comment: link.comment,
       createdAt: link.createdAt,
     }));
 

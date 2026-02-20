@@ -134,7 +134,7 @@ export class ProjectsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: CreateManualShareLinkDto,
   ) {
-    return this.service.createManualShareLink(user, id, dto.labelIds);
+    return this.service.createManualShareLink(user, id, dto.labelIds, dto.comment);
   }
 
   @Get(':id/manual/share-links')
