@@ -1,4 +1,5 @@
-import { IsArray, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { DocumentationEntityType } from '@prisma/client';
+import { IsArray, IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateManualShareLinkDto {
   @IsArray()
@@ -9,4 +10,12 @@ export class CreateManualShareLinkDto {
   @IsString()
   @MaxLength(500)
   comment?: string;
+
+  @IsOptional()
+  @IsEnum(DocumentationEntityType)
+  rootType?: DocumentationEntityType;
+
+  @IsOptional()
+  @IsUUID('4')
+  rootId?: string;
 }

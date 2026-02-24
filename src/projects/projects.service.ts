@@ -321,6 +321,7 @@ export class ProjectsService {
     baseLabelIds: string[] | null,
     labelsCsv?: string,
     projectOverride?: { id: string; name: string; description: string | null; deletedAt?: Date | null },
+    root?: { rootType?: DocumentationEntityType | null; rootId?: string | null },
   ) {
     const project =
       projectOverride ??
@@ -420,6 +421,65 @@ export class ProjectsService {
         }),
       ]);
 
+    const resolvedRootType = root?.rootType ?? DocumentationEntityType.PROJECT;
+    const resolvedRootId = root?.rootId ?? null;
+    let scopedModules = rawModules;
+    let scopedFeatures = rawFeatures;
+    let includeProjectDocs = true;
+
+    if (resolvedRootType === DocumentationEntityType.MODULE) {
+      if (!resolvedRootId) {
+        throw new BadRequestException('Root module is required.');
+      }
+      const rootModule = rawModules.find((mod) => mod.id === resolvedRootId);
+      if (!rootModule) {
+        throw new NotFoundException('Root module not found.');
+      }
+      const modulesByParent = new Map<string | null, string[]>();
+      for (const mod of rawModules) {
+        const parentKey = mod.parentModuleId ?? null;
+        const list = modulesByParent.get(parentKey) ?? [];
+        list.push(mod.id);
+        modulesByParent.set(parentKey, list);
+      }
+      const allowed = new Set<string>();
+      const stack = [rootModule.id];
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (allowed.has(current)) continue;
+        allowed.add(current);
+        const children = modulesByParent.get(current) ?? [];
+        for (const child of children) stack.push(child);
+      }
+
+      scopedModules = rawModules.map((mod) =>
+        mod.id === rootModule.id ? { ...mod, parentModuleId: null, isRoot: true } : mod,
+      ).filter((mod) => allowed.has(mod.id));
+      scopedFeatures = rawFeatures.filter((feat) => allowed.has(feat.moduleId));
+      includeProjectDocs = false;
+    } else if (resolvedRootType === DocumentationEntityType.FEATURE) {
+      if (!resolvedRootId) {
+        throw new BadRequestException('Root feature is required.');
+      }
+      const rootFeature = rawFeatures.find((feat) => feat.id === resolvedRootId);
+      if (!rootFeature) {
+        throw new NotFoundException('Root feature not found.');
+      }
+      const rootModule = rawModules.find((mod) => mod.id === rootFeature.moduleId);
+      if (!rootModule) {
+        throw new NotFoundException('Root module not found.');
+      }
+      scopedModules = [
+        {
+          ...rootModule,
+          parentModuleId: null,
+          isRoot: true,
+        },
+      ];
+      scopedFeatures = [rootFeature];
+      includeProjectDocs = false;
+    }
+
     const visibleLabels = labels.map((label) => ({
       id: label.id,
       name: label.name,
@@ -461,7 +521,7 @@ export class ProjectsService {
         const list = featureDocs.get(record.featureId) ?? [];
         list.push(summary);
         featureDocs.set(record.featureId, list);
-      } else if (record.entityType === DocumentationEntityType.PROJECT) {
+      } else if (record.entityType === DocumentationEntityType.PROJECT && includeProjectDocs) {
         projectDocs.push(summary);
       }
     }
@@ -505,11 +565,11 @@ export class ProjectsService {
         .slice()
         .sort((a, b) => a.moduleName.localeCompare(b.moduleName) || a.name.localeCompare(b.name));
 
-    const modules: ModuleRow[] = rawModules.map((mod) => ({
+    const modules: ModuleRow[] = scopedModules.map((mod) => ({
       ...mod,
       documentationLabels: sortDocumentation(moduleDocs.get(mod.id) ?? []),
     }));
-    const features: FeatureRow[] = rawFeatures.map((feat) => ({
+    const features: FeatureRow[] = scopedFeatures.map((feat) => ({
       ...feat,
       documentationLabels: sortDocumentation(featureDocs.get(feat.id) ?? []),
       linkedFeatures: sortLinkedFeatures(featureLinksMap.get(feat.id) ?? []),
@@ -523,6 +583,8 @@ export class ProjectsService {
       documentationLabels: sortDocumentation(projectDocs),
       modules: modulesTree,
       project: { id: project.id, name: project.name, description: project.description },
+      rootType: resolvedRootType,
+      rootId: resolvedRootType === DocumentationEntityType.PROJECT ? null : resolvedRootId,
     };
   }
 
@@ -947,11 +1009,16 @@ export class ProjectsService {
       select: {
         id: true,
         labelIds: true,
+        rootType: true,
+        rootId: true,
         project: { select: { id: true, name: true, description: true, deletedAt: true } },
       },
     });
     if (!link) throw new NotFoundException('Link not found');
-    return this.buildManualForViewer(link.project.id, link.labelIds, labelsCsv, link.project);
+    return this.buildManualForViewer(link.project.id, link.labelIds, labelsCsv, link.project, {
+      rootType: link.rootType ?? DocumentationEntityType.PROJECT,
+      rootId: link.rootId ?? null,
+    });
   }
 
   async createManualShareLink(
@@ -959,6 +1026,8 @@ export class ProjectsService {
     projectId: string,
     labelIds: string[],
     comment?: string,
+    rootType?: DocumentationEntityType,
+    rootId?: string,
   ) {
     await this.ensureOwnerOrMaintainer(user.sub, projectId);
     const normalizedLabelIds = this.normalizeLabelIds(labelIds ?? []);
@@ -969,14 +1038,43 @@ export class ProjectsService {
     const allowedSet = new Set(projectLabels.map((label) => label.id));
     const sanitized = normalizedLabelIds.filter((id) => allowedSet.has(id));
 
+    const effectiveRootType = rootType ?? DocumentationEntityType.PROJECT;
+    let effectiveRootId: string | null = rootId ?? null;
+    if (effectiveRootType === DocumentationEntityType.PROJECT) {
+      effectiveRootId = null;
+    } else if (!effectiveRootId) {
+      throw new BadRequestException('rootId is required for this rootType.');
+    }
+
+    if (effectiveRootType === DocumentationEntityType.MODULE && effectiveRootId) {
+      const module = await this.prisma.module.findFirst({
+        where: { id: effectiveRootId, projectId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!module) {
+        throw new BadRequestException('Root module not found for this project.');
+      }
+    }
+    if (effectiveRootType === DocumentationEntityType.FEATURE && effectiveRootId) {
+      const feature = await this.prisma.feature.findFirst({
+        where: { id: effectiveRootId, deletedAt: null, module: { projectId, deletedAt: null } },
+        select: { id: true },
+      });
+      if (!feature) {
+        throw new BadRequestException('Root feature not found for this project.');
+      }
+    }
+
     const link = await this.prisma.manualShareLink.create({
       data: {
         projectId,
         createdById: user.sub,
         labelIds: sanitized,
         comment: comment?.trim() || null,
+        rootType: effectiveRootType === DocumentationEntityType.PROJECT ? null : effectiveRootType,
+        rootId: effectiveRootId,
       },
-      select: { id: true, labelIds: true, comment: true, createdAt: true },
+      select: { id: true, labelIds: true, comment: true, rootType: true, rootId: true, createdAt: true },
     });
 
     await this.touchProject(projectId);
@@ -985,6 +1083,8 @@ export class ProjectsService {
       projectId,
       labelIds: link.labelIds,
       comment: link.comment,
+      rootType: link.rootType ?? DocumentationEntityType.PROJECT,
+      rootId: link.rootId ?? null,
       createdAt: link.createdAt,
     };
   }
@@ -995,7 +1095,7 @@ export class ProjectsService {
       this.prisma.manualShareLink.findMany({
         where: { projectId },
         orderBy: { createdAt: 'desc' },
-        select: { id: true, labelIds: true, comment: true, createdAt: true },
+        select: { id: true, labelIds: true, comment: true, rootType: true, rootId: true, createdAt: true },
       }),
       this.prisma.projectLabel.findMany({
         where: { projectId, deletedAt: null },
@@ -1017,6 +1117,8 @@ export class ProjectsService {
         .map((id) => labelInfoMap.get(id))
         .filter((value): value is VisibleDocumentationLabel => value !== undefined),
       comment: link.comment,
+      rootType: link.rootType ?? DocumentationEntityType.PROJECT,
+      rootId: link.rootId ?? null,
       createdAt: link.createdAt,
     }));
 
