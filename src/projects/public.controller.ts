@@ -23,4 +23,13 @@ export class PublicController {
   ) {
     return this.service.getSharedManual(linkId, labels);
   }
+
+  @Public()
+  @Get('manual/shared/:linkId/images')
+  async sharedManualImages(
+    @Param('linkId', new ParseUUIDPipe()) linkId: string,
+    @Query('labelId') labelId?: string,
+  ) {
+    return this.service.getSharedManualImages(linkId, labelId);
+  }
 }

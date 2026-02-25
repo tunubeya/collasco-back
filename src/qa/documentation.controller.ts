@@ -92,6 +92,16 @@ export class DocumentationController {
     return this.qaService.listDocumentationImages(userId, entityType, entityId, labelId);
   }
 
+  @Get('projects/:projectId/documentation/images/all')
+  async listProjectDocumentationImages(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query('labelId') labelId?: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.listProjectDocumentationImages(userId, projectId, labelId);
+  }
+
   @UseInterceptors(FileInterceptor('file'))
   @Post(':entityType/:entityId/documentation/:labelId/images')
   async uploadDocumentationImage(

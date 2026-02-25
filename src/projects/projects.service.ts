@@ -14,7 +14,7 @@ import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
 import { parseRepoUrl } from 'src/github/utils/parse-repo-url';
 import type { ListIssuesDto, ListPullsDto } from 'src/github/dto/list.dto';
 import { GithubService } from 'src/github/github.service';
-import { DocumentationEntityType, ProjectMemberRole, Visibility } from '@prisma/client';
+import { DocumentationEntityType, Prisma, ProjectMemberRole, Visibility } from '@prisma/client';
 
 export type VisibleDocumentationLabel = {
   id: string;
@@ -1019,6 +1019,129 @@ export class ProjectsService {
       rootType: link.rootType ?? DocumentationEntityType.PROJECT,
       rootId: link.rootId ?? null,
     });
+  }
+
+  async getSharedManualImages(linkId: string, labelId?: string) {
+    const link = await this.prisma.manualShareLink.findUnique({
+      where: { id: linkId },
+      select: {
+        id: true,
+        labelIds: true,
+        rootType: true,
+        rootId: true,
+        project: { select: { id: true, deletedAt: true } },
+      },
+    });
+    if (!link) throw new NotFoundException('Link not found');
+    if (!link.project || link.project.deletedAt) {
+      throw new NotFoundException('Project not found');
+    }
+
+    const allowedLabelIds = link.labelIds ?? [];
+    if (allowedLabelIds.length === 0) {
+      return { items: [] };
+    }
+
+    if (labelId && !allowedLabelIds.includes(labelId)) {
+      throw new BadRequestException('Label not allowed for this share link.');
+    }
+
+    const projectId = link.project.id;
+    const effectiveRootType = link.rootType ?? DocumentationEntityType.PROJECT;
+    const effectiveRootId = link.rootId ?? null;
+
+    let imagesWhere: Prisma.DocumentationImageWhereInput = {
+      projectId,
+      labelId: labelId ? labelId : { in: allowedLabelIds },
+    };
+
+    if (effectiveRootType === DocumentationEntityType.MODULE) {
+      if (!effectiveRootId) {
+        throw new BadRequestException('Root module is required.');
+      }
+      const [modules, features] = await this.prisma.$transaction([
+        this.prisma.module.findMany({
+          where: { projectId, deletedAt: null },
+          select: { id: true, parentModuleId: true },
+        }),
+        this.prisma.feature.findMany({
+          where: { module: { projectId, deletedAt: null }, deletedAt: null },
+          select: { id: true, moduleId: true },
+        }),
+      ]);
+      const modulesByParent = new Map<string | null, string[]>();
+      for (const mod of modules) {
+        const parentKey = mod.parentModuleId ?? null;
+        const list = modulesByParent.get(parentKey) ?? [];
+        list.push(mod.id);
+        modulesByParent.set(parentKey, list);
+      }
+      const allowedModules = new Set<string>();
+      const stack = [effectiveRootId];
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (allowedModules.has(current)) continue;
+        allowedModules.add(current);
+        const children = modulesByParent.get(current) ?? [];
+        for (const child of children) stack.push(child);
+      }
+      const allowedFeatures = features
+        .filter((feat) => allowedModules.has(feat.moduleId))
+        .map((feat) => feat.id);
+
+      imagesWhere = {
+        ...imagesWhere,
+        OR: [
+          { entityType: DocumentationEntityType.MODULE, entityId: { in: Array.from(allowedModules) } },
+          { entityType: DocumentationEntityType.FEATURE, entityId: { in: allowedFeatures } },
+        ],
+      };
+    } else if (effectiveRootType === DocumentationEntityType.FEATURE) {
+      if (!effectiveRootId) {
+        throw new BadRequestException('Root feature is required.');
+      }
+      const feature = await this.prisma.feature.findFirst({
+        where: { id: effectiveRootId, deletedAt: null, module: { projectId, deletedAt: null } },
+        select: { id: true, moduleId: true },
+      });
+      if (!feature) {
+        throw new NotFoundException('Root feature not found.');
+      }
+      imagesWhere = {
+        ...imagesWhere,
+        OR: [
+          { entityType: DocumentationEntityType.MODULE, entityId: feature.moduleId },
+          { entityType: DocumentationEntityType.FEATURE, entityId: feature.id },
+        ],
+      };
+    }
+
+    const images = await this.prisma.documentationImage.findMany({
+      where: imagesWhere,
+      orderBy: [{ labelId: 'asc' }, { createdAt: 'asc' }],
+      include: { createdBy: { select: { id: true, name: true, email: true } } },
+    });
+
+    const imagesByLabel = new Map<string, Array<{ id: string; name: string; url: string; createdAt: Date; createdBy: { id: string; name: string | null; email: string } | null }>>();
+    for (const image of images) {
+      if (!imagesByLabel.has(image.labelId)) {
+        imagesByLabel.set(image.labelId, []);
+      }
+      imagesByLabel.get(image.labelId)?.push({
+        id: image.id,
+        name: image.name,
+        url: image.url,
+        createdAt: image.createdAt,
+        createdBy: image.createdBy ?? null,
+      });
+    }
+
+    const items = Array.from(imagesByLabel.entries()).map(([key, value]) => ({
+      labelId: key,
+      images: value,
+    }));
+
+    return { items };
   }
 
   async createManualShareLink(

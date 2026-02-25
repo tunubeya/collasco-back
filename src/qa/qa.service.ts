@@ -89,6 +89,19 @@ type DocumentationImageResponse = {
   }>;
 };
 
+type ProjectDocumentationImageResponse = {
+  labelId: string;
+  images: Array<{
+    id: string;
+    name: string;
+    url: string;
+    entityType: DocumentationEntityType;
+    entityId: string;
+    createdAt: Date;
+    createdBy: { id: string; name: string | null; email: string } | null;
+  }>;
+};
+
 type ProjectDashboardMetrics = {
   totalFeatures: number;
   featuresMissingDescription: number;
@@ -606,6 +619,70 @@ export class QaService {
     return { items };
   }
 
+  async listProjectDocumentationImages(
+    userId: string,
+    projectId: string,
+    labelId?: string,
+  ): Promise<{ items: ProjectDocumentationImageResponse[] }> {
+    await assertProjectRead(this.prisma, userId, projectId);
+    const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const labels = await this.prisma.projectLabel.findMany({
+      where: { projectId, deletedAt: null },
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    const labelViews = labels.map((label) => this.mapProjectLabel(label));
+    const visibleLabels = labelViews.filter((label) => this.canViewLabel(role, label));
+
+    if (labelId) {
+      const labelView = labelViews.find((label) => label.id === labelId);
+      if (!labelView || labelView.deletedAt) {
+        throw new BadRequestException('Label not found for this project.');
+      }
+      if (!this.canViewLabel(role, labelView)) {
+        throw new ForbiddenException('You cannot use this label.');
+      }
+    }
+
+    const filterLabelIds = labelId ? [labelId] : visibleLabels.map((label) => label.id);
+    if (filterLabelIds.length === 0) {
+      return { items: [] };
+    }
+
+    const images = await this.prisma.documentationImage.findMany({
+      where: {
+        projectId,
+        labelId: labelId ? labelId : { in: filterLabelIds },
+      },
+      orderBy: [{ labelId: 'asc' }, { createdAt: 'asc' }],
+      include: { createdBy: { select: { id: true, name: true, email: true } } },
+    });
+
+    const imagesByLabel = new Map<string, ProjectDocumentationImageResponse['images']>();
+    for (const image of images) {
+      if (!imagesByLabel.has(image.labelId)) {
+        imagesByLabel.set(image.labelId, []);
+      }
+      imagesByLabel.get(image.labelId)?.push({
+        id: image.id,
+        name: image.name,
+        url: image.url,
+        entityType: image.entityType,
+        entityId: image.entityId,
+        createdAt: image.createdAt,
+        createdBy: image.createdBy ?? null,
+      });
+    }
+
+    const items = (labelId ? labelViews : visibleLabels)
+      .filter((label) => imagesByLabel.has(label.id))
+      .map((label) => ({
+        labelId: label.id,
+        images: imagesByLabel.get(label.id) ?? [],
+      }));
+
+    return { items };
+  }
+
   async uploadDocumentationImage(
     userId: string,
     entityTypeRaw: string,
@@ -649,11 +726,11 @@ export class QaService {
     }
 
     const existing = await this.prisma.documentationImage.findFirst({
-      where: { projectId, entityType, entityId, labelId, name: trimmedName },
+      where: { projectId, name: trimmedName },
       select: { id: true },
     });
     if (existing) {
-      throw new ConflictException('Image name already exists for this label.');
+      throw new ConflictException('Image name already exists for this project.');
     }
 
     const url = await this.googleCloudStorage.uploadFile(file);
