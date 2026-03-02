@@ -1212,11 +1212,55 @@ export class ProjectsService {
     };
   }
 
-  async listManualShareLinks(user: AccessTokenPayload, projectId: string) {
+  async listManualShareLinks(
+    user: AccessTokenPayload,
+    projectId: string,
+    scope?: DocumentationEntityType,
+    rootId?: string,
+  ) {
     await this.ensureOwnerOrMaintainer(user.sub, projectId);
+    if (!scope && rootId) {
+      throw new BadRequestException('Scope is required when rootId is provided.');
+    }
+    if (scope === DocumentationEntityType.PROJECT && rootId) {
+      throw new BadRequestException('rootId is not allowed for project scope.');
+    }
+    if (
+      (scope === DocumentationEntityType.MODULE || scope === DocumentationEntityType.FEATURE) &&
+      !rootId
+    ) {
+      throw new BadRequestException('rootId is required for module or feature scope.');
+    }
+    if (scope === DocumentationEntityType.MODULE && rootId) {
+      const moduleExists = await this.prisma.module.findFirst({
+        where: { id: rootId, projectId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!moduleExists) {
+        throw new BadRequestException('Root module not found for this project.');
+      }
+    }
+    if (scope === DocumentationEntityType.FEATURE && rootId) {
+      const featureExists = await this.prisma.feature.findFirst({
+        where: { id: rootId, deletedAt: null, module: { projectId, deletedAt: null } },
+        select: { id: true },
+      });
+      if (!featureExists) {
+        throw new BadRequestException('Root feature not found for this project.');
+      }
+    }
+
+    const where: Prisma.ManualShareLinkWhereInput = { projectId };
+    if (scope === DocumentationEntityType.PROJECT) {
+      where.rootType = null;
+    } else if (scope === DocumentationEntityType.MODULE || scope === DocumentationEntityType.FEATURE) {
+      where.rootType = scope;
+      where.rootId = rootId ?? undefined;
+    }
+
     const [links, labels] = await this.prisma.$transaction([
       this.prisma.manualShareLink.findMany({
-        where: { projectId },
+        where,
         orderBy: { createdAt: 'desc' },
         select: { id: true, labelIds: true, comment: true, rootType: true, rootId: true, createdAt: true },
       }),

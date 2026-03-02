@@ -25,6 +25,7 @@ import { IsEnum } from 'class-validator';
 import { ProjectMemberRole } from '@prisma/client';
 import { UpdateDocumentationLabelPreferencesDto } from './dto/update-documentation-label-preferences.dto';
 import { CreateManualShareLinkDto } from './dto/create-manual-share-link.dto';
+import { ListManualShareLinksDto } from './dto/list-manual-share-links.dto';
 
 class UpdateMemberRoleDto {
   @IsEnum(ProjectMemberRole)
@@ -141,8 +142,9 @@ export class ProjectsController {
   async listManualShareLinks(
     @CurrentUser() user: AccessTokenPayload,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() query: ListManualShareLinksDto,
   ) {
-    return this.service.listManualShareLinks(user, id);
+    return this.service.listManualShareLinks(user, id, query.scope, query.rootId);
   }
 
   @Delete(':id/manual/share-links/:linkId')
