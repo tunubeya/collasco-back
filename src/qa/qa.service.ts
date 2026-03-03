@@ -825,6 +825,101 @@ export class QaService {
     return { ok: true };
   }
 
+  async renameDocumentationImage(
+    userId: string,
+    entityTypeRaw: string,
+    entityId: string,
+    imageId: string,
+    dto: { name: string },
+  ): Promise<{
+    id: string;
+    name: string;
+    url: string;
+    labelId: string;
+    entityType: DocumentationEntityType;
+    entityId: string;
+  }> {
+    const entityType = this.parseDocumentationEntityType(entityTypeRaw);
+    const trimmedName = dto.name?.trim();
+    if (!trimmedName) {
+      throw new BadRequestException('Name is required.');
+    }
+
+    const projectId = await this.resolveDocumentationEntityProjectId(entityType, entityId);
+    await assertProjectWrite(this.prisma, userId, projectId);
+
+    const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const image = await this.prisma.documentationImage.findFirst({
+      where: {
+        id: imageId,
+        projectId,
+        entityType,
+        entityId,
+      },
+      include: {
+        label: {
+          select: {
+            id: true,
+            name: true,
+            isMandatory: true,
+            defaultNotApplicable: true,
+            visibleToRoles: true,
+            readOnlyRoles: true,
+            displayOrder: true,
+            deletedAt: true,
+            deletedBy: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+    });
+    if (!image || !image.label || image.label.deletedAt) {
+      throw new NotFoundException('Image not found.');
+    }
+
+    const labelView = this.mapProjectLabel(image.label);
+    if (!this.canViewLabel(role, labelView)) {
+      throw new ForbiddenException('You cannot use this label.');
+    }
+    if (!this.canEditLabel(role, labelView)) {
+      throw new ForbiddenException('You do not have permission to edit this label.');
+    }
+
+    const existing = await this.prisma.documentationImage.findFirst({
+      where: {
+        projectId,
+        name: trimmedName,
+        NOT: { id: image.id },
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException('Image name already exists for this project.');
+    }
+
+    const updated = await this.prisma.documentationImage.update({
+      where: { id: image.id },
+      data: { name: trimmedName },
+      select: {
+        id: true,
+        name: true,
+        url: true,
+        labelId: true,
+        entityType: true,
+        entityId: true,
+      },
+    });
+
+    if (entityType === DocumentationEntityType.FEATURE) {
+      await this.touchFeature(entityId);
+    } else if (entityType === DocumentationEntityType.MODULE) {
+      await this.touchModule(entityId);
+    } else {
+      await this.touchProject(projectId);
+    }
+
+    return updated;
+  }
+
   async listLinkedFeatures(
     userId: string,
     featureId: string,

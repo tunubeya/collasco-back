@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -16,6 +17,7 @@ import type { AccessTokenPayload } from 'src/auth/types/jwt-payload';
 import { CurrentUser } from 'src/auth/current-user.decorator';
 import { QaService } from './qa.service';
 import { UpdateDocumentationEntryDto } from './dto/update-documentation-entry.dto';
+import { RenameDocumentationImageDto } from './dto/rename-documentation-image.dto';
 
 @Controller('qa')
 export class DocumentationController {
@@ -125,6 +127,18 @@ export class DocumentationController {
   ) {
     const userId = this.resolveUserId(user);
     return this.qaService.deleteDocumentationImage(userId, entityType, entityId, imageId);
+  }
+
+  @Patch(':entityType/:entityId/documentation/images/:imageId')
+  async renameDocumentationImage(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('entityType') entityType: string,
+    @Param('entityId', ParseUUIDPipe) entityId: string,
+    @Param('imageId', ParseUUIDPipe) imageId: string,
+    @Body() dto: RenameDocumentationImageDto,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.renameDocumentationImage(userId, entityType, entityId, imageId, dto);
   }
 
   private resolveUserId(user: AccessTokenPayload | undefined): string {
