@@ -14,7 +14,17 @@ import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
 import { parseRepoUrl } from 'src/github/utils/parse-repo-url';
 import type { ListIssuesDto, ListPullsDto } from 'src/github/dto/list.dto';
 import { GithubService } from 'src/github/github.service';
-import { DocumentationEntityType, Prisma, ProjectMemberRole, Visibility } from '@prisma/client';
+import { DocumentationEntityType, Prisma, Visibility } from '@prisma/client';
+import {
+  DEFAULT_PROJECT_ROLES,
+  DEFAULT_MEMBER_ROLE_NAME,
+  PERMISSION_KEYS,
+  type PermissionKey,
+  ensurePermissionsExist,
+  fetchPermissionIds,
+  hasProjectPermission,
+  requireProjectPermission,
+} from './permissions';
 
 export type VisibleDocumentationLabel = {
   id: string;
@@ -115,26 +125,31 @@ export class ProjectsService {
 
   private async resolveProjectRole(userId: string, project: { id: string; ownerId: string }) {
     if (project.ownerId === userId) {
-      return ProjectMemberRole.OWNER;
+      return this.prisma.projectRole.findFirst({
+        where: { projectId: project.id, isOwner: true },
+        select: { id: true, name: true, isOwner: true },
+      });
     }
     const membership = await this.prisma.projectMember.findUnique({
       where: { projectId_userId: { projectId: project.id, userId } },
-      select: { role: true },
+      select: { role: { select: { id: true, name: true, isOwner: true } } },
     });
-    return membership?.role ?? ProjectMemberRole.VIEWER;
+    return membership?.role ?? null;
   }
 
   private canViewDocumentationLabel(
-    role: ProjectMemberRole,
-    visibleToRoles?: ProjectMemberRole[] | null,
+    roleId: string | null,
+    visibleRoleIds?: string[] | null,
+    isOwner = false,
   ): boolean {
-    if (role === ProjectMemberRole.OWNER) {
+    if (isOwner) {
       return true;
     }
-    if (!visibleToRoles || visibleToRoles.length === 0) {
+    if (!visibleRoleIds || visibleRoleIds.length === 0) {
       return true;
     }
-    return visibleToRoles.includes(role);
+    if (!roleId) return false;
+    return visibleRoleIds.includes(roleId);
   }
 
   private filterVisibleLabels(
@@ -142,13 +157,15 @@ export class ProjectsService {
       id: string;
       name: string;
       isMandatory: boolean;
-      visibleToRoles: ProjectMemberRole[] | null;
+      visibleRoleIds: string[] | null;
       displayOrder: number;
     }>,
-    role: ProjectMemberRole,
+    role: { id: string; isOwner: boolean } | null,
   ): VisibleDocumentationLabel[] {
     return labels
-      .filter((label) => this.canViewDocumentationLabel(role, label.visibleToRoles ?? []))
+      .filter((label) =>
+        this.canViewDocumentationLabel(role?.id ?? null, label.visibleRoleIds ?? [], role?.isOwner ?? false),
+      )
       .map((label) => ({
         id: label.id,
         name: label.name,
@@ -157,7 +174,7 @@ export class ProjectsService {
       }));
   }
 
-  private async loadVisibleLabelsForRole(projectId: string, role: ProjectMemberRole) {
+  private async loadVisibleLabelsForRole(projectId: string, role: { id: string; isOwner: boolean } | null) {
     const labels = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: null },
       select: {
@@ -165,11 +182,15 @@ export class ProjectsService {
         name: true,
         isMandatory: true,
         displayOrder: true,
-        visibleToRoles: true,
+        visibleRoles: { select: { roleId: true } },
       },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    return this.filterVisibleLabels(labels, role);
+    const mapped = labels.map((label) => ({
+      ...label,
+      visibleRoleIds: label.visibleRoles.map((entry) => entry.roleId),
+    }));
+    return this.filterVisibleLabels(mapped, role);
   }
 
   private compareModules(a: ModuleRow, b: ModuleRow) {
@@ -370,7 +391,7 @@ export class ProjectsService {
             name: true,
             isMandatory: true,
             displayOrder: true,
-            visibleToRoles: true,
+            visibleRoles: { select: { roleId: true } },
           },
           orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
         }),
@@ -600,41 +621,20 @@ export class ProjectsService {
   private async ensureCanRead(user: AccessTokenPayload, projectId: string) {
     const p = await this.getProjectOrThrow(projectId);
     if (p.visibility === Visibility.PUBLIC) return p; // público
-    if (p.ownerId === user.sub) return p;
-
-    const member = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId, userId: user.sub } },
-    });
-    if (!member) throw new ForbiddenException('Forbidden');
+    const ok = await hasProjectPermission(this.prisma, user.sub, projectId, PERMISSION_KEYS.PROJECT_READ);
+    if (!ok) throw new ForbiddenException('Forbidden');
     return p;
   }
 
-  private async ensureOwner(userId: string, projectId: string, opts: { includeDeleted?: boolean } = {}) {
-    const p = await this.getProjectOrThrow(projectId, opts);
-    if (p.ownerId !== userId) throw new ForbiddenException('Owner only');
-    return p;
-  }
-
-  private async ensureOwnerOrMaintainer(
+  private async ensureProjectPermission(
     userId: string,
     projectId: string,
+    permission: PermissionKey,
     opts: { includeDeleted?: boolean } = {},
   ) {
     const project = await this.getProjectOrThrow(projectId, opts);
-    if (project.ownerId === userId) {
-      return { project, role: ProjectMemberRole.OWNER };
-    }
-
-    const membership = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId, userId } },
-      select: { role: true },
-    });
-
-    if (!membership || membership.role !== ProjectMemberRole.MAINTAINER) {
-      throw new ForbiddenException('Owner or maintainer only');
-    }
-
-    return { project, role: membership.role };
+    await requireProjectPermission(this.prisma, userId, projectId, permission);
+    return project;
   }
 
   /** === GitHub repo utils === */
@@ -654,6 +654,33 @@ export class ProjectsService {
     });
   }
 
+  private async getDefaultRoleId(projectId: string): Promise<string> {
+    const role =
+      (await this.prisma.projectRole.findFirst({
+        where: { projectId, name: DEFAULT_MEMBER_ROLE_NAME },
+        select: { id: true, isOwner: true },
+      })) ??
+      (await this.prisma.projectRole.findFirst({
+        where: { projectId, isDefault: true, isOwner: false },
+        select: { id: true, isOwner: true },
+        orderBy: { createdAt: 'asc' },
+      }));
+    if (!role || role.isOwner) {
+      throw new BadRequestException('No hay rol por defecto para el proyecto');
+    }
+    return role.id;
+  }
+
+  private normalizePermissionKeys(keys: string[]): PermissionKey[] {
+    const allowed = new Set(Object.values(PERMISSION_KEYS));
+    const unique = Array.from(new Set(keys));
+    const invalid = unique.filter((key) => !allowed.has(key as PermissionKey));
+    if (invalid.length > 0) {
+      throw new BadRequestException(`Permisos inválidos: ${invalid.join(', ')}`);
+    }
+    return unique as PermissionKey[];
+  }
+
   /** === CRUD proyecto === */
   async create(user: AccessTokenPayload, dto: CreateProjectDto) {
     if (dto.repositoryUrl) {
@@ -662,20 +689,53 @@ export class ProjectsService {
         throw new BadRequestException('repositoryUrl debe ser https://github.com/<owner>/<repo>');
       }
     }
-    return this.prisma.project.create({
-      data: {
-        name: dto.name,
-        slug: null, // si luego agregas slug en DTO, setéalo aquí y valida @@unique([ownerId, slug])
-        description: dto.description ?? null,
-        status: dto.status ?? undefined,
-        visibility: dto.visibility ?? undefined,
-        deadline: null,
-        repositoryUrl: dto.repositoryUrl ?? null,
-        ownerId: user.sub,
-        members: {
-          create: { userId: user.sub, role: ProjectMemberRole.OWNER },
+    return this.prisma.$transaction(async (tx) => {
+      const project = await tx.project.create({
+        data: {
+          name: dto.name,
+          slug: null, // si luego agregas slug en DTO, setéalo aquí y valida @@unique([ownerId, slug])
+          description: dto.description ?? null,
+          status: dto.status ?? undefined,
+          visibility: dto.visibility ?? undefined,
+          deadline: null,
+          repositoryUrl: dto.repositoryUrl ?? null,
+          ownerId: user.sub,
         },
-      },
+      });
+
+      const permissionKeys = Array.from(new Set(DEFAULT_PROJECT_ROLES.flatMap((role) => role.permissions)));
+      await ensurePermissionsExist(tx, permissionKeys);
+      const permissionIds = await fetchPermissionIds(tx, permissionKeys);
+
+      const createdRoles = await Promise.all(
+        DEFAULT_PROJECT_ROLES.map((role) =>
+          tx.projectRole.create({
+            data: {
+              projectId: project.id,
+              name: role.name,
+              description: role.description ?? null,
+              isOwner: role.isOwner,
+              isDefault: role.isDefault,
+              rolePermissions: {
+                create: role.permissions.map((key) => ({
+                  permissionId: permissionIds.get(key)!,
+                })),
+              },
+            },
+          }),
+        ),
+      );
+
+      const ownerRole = createdRoles.find((role) => role.isOwner);
+      if (!ownerRole) {
+        throw new Error('Owner role not created');
+      }
+
+      await tx.projectMember.create({
+        data: { projectId: project.id, userId: user.sub, roleId: ownerRole.id },
+      });
+
+      return project;
     });
   }
 
@@ -768,22 +828,16 @@ export class ProjectsService {
       include: {
         owner: { select: { id: true, email: true, name: true } },
         members: {
-          include: { user: { select: { id: true, email: true, name: true } } },
+          include: {
+            user: { select: { id: true, email: true, name: true } },
+            role: { select: { id: true, name: true, isOwner: true } },
+          },
         },
         githubCredential: true,
       },
     });
 
-    let membershipRole: ProjectMemberRole | null = null;
-    if (baseProject.ownerId === user.sub) {
-      membershipRole = ProjectMemberRole.OWNER;
-    } else {
-      const membership = await this.prisma.projectMember.findUnique({
-        where: { projectId_userId: { projectId: id, userId: user.sub } },
-        select: { role: true },
-      });
-      membershipRole = membership?.role ?? null;
-    }
+    const membershipRole = await this.resolveProjectRole(user.sub, baseProject);
 
     return project ? { ...project, membershipRole } : null;
   }
@@ -827,7 +881,7 @@ export class ProjectsService {
             name: true,
             isMandatory: true,
             displayOrder: true,
-            visibleToRoles: true,
+            visibleRoles: { select: { roleId: true } },
           },
           orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
         }),
@@ -888,7 +942,7 @@ export class ProjectsService {
         name: label.name,
         isMandatory: label.isMandatory,
         displayOrder: label.displayOrder ?? 0,
-        visibleToRoles: label.visibleToRoles ?? [],
+        visibleRoleIds: label.visibleRoles.map((entry) => entry.roleId),
       })),
       viewerRole,
     );
@@ -1152,7 +1206,7 @@ export class ProjectsService {
     rootType?: DocumentationEntityType,
     rootId?: string,
   ) {
-    await this.ensureOwnerOrMaintainer(user.sub, projectId);
+    await this.ensureProjectPermission(user.sub, projectId, PERMISSION_KEYS.SHARE_LINKS_MANAGE);
     const normalizedLabelIds = this.normalizeLabelIds(labelIds ?? []);
     const projectLabels = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: null },
@@ -1218,7 +1272,7 @@ export class ProjectsService {
     scope?: DocumentationEntityType,
     rootId?: string,
   ) {
-    await this.ensureOwnerOrMaintainer(user.sub, projectId);
+    await this.ensureProjectPermission(user.sub, projectId, PERMISSION_KEYS.SHARE_LINKS_MANAGE);
     if (!scope && rootId) {
       throw new BadRequestException('Scope is required when rootId is provided.');
     }
@@ -1293,7 +1347,7 @@ export class ProjectsService {
   }
 
   async revokeManualShareLink(user: AccessTokenPayload, projectId: string, linkId: string) {
-    await this.ensureOwnerOrMaintainer(user.sub, projectId);
+    await this.ensureProjectPermission(user.sub, projectId, PERMISSION_KEYS.SHARE_LINKS_MANAGE);
     const link = await this.prisma.manualShareLink.findUnique({
       where: { id: linkId },
       select: { id: true, projectId: true },
@@ -1357,7 +1411,7 @@ export class ProjectsService {
   }
 
   async update(user: AccessTokenPayload, id: string, dto: UpdateProjectDto) {
-    const { project } = await this.ensureOwnerOrMaintainer(user.sub, id);
+    const project = await this.ensureProjectPermission(user.sub, id, PERMISSION_KEYS.PROJECT_UPDATE);
 
     if (dto.repositoryUrl !== undefined && dto.repositoryUrl !== null) {
       const parsed = parseRepoUrl(dto.repositoryUrl);
@@ -1389,7 +1443,7 @@ export class ProjectsService {
   }
 
   async remove(user: AccessTokenPayload, id: string) {
-    await this.ensureOwnerOrMaintainer(user.sub, id);
+    await this.ensureProjectPermission(user.sub, id, PERMISSION_KEYS.PROJECT_DELETE);
     const project = await this.getProjectOrThrow(id);
     const deletedAt = new Date();
     await this.prisma.$transaction(async (tx) => {
@@ -1444,7 +1498,7 @@ export class ProjectsService {
     if (!project.deletedAt) {
       throw new ConflictException('Project is not deleted');
     }
-    await this.ensureOwnerOrMaintainer(user.sub, id, { includeDeleted: true });
+    await this.ensureProjectPermission(user.sub, id, PERMISSION_KEYS.PROJECT_DELETE, { includeDeleted: true });
     const cutoff = project.deletedAt;
 
     await this.prisma.$transaction(async (tx) => {
@@ -1474,9 +1528,13 @@ export class ProjectsService {
     user: AccessTokenPayload,
     projectId: string,
     memberEmail: string,
-    role: ProjectMemberRole = ProjectMemberRole.DEVELOPER,
+    roleId?: string,
   ) {
-    const p = await this.ensureOwner(user.sub, projectId);
+    const p = await this.ensureProjectPermission(
+      user.sub,
+      projectId,
+      PERMISSION_KEYS.PROJECT_MANAGE_MEMBERS,
+    );
     const normalizedEmail = memberEmail.trim().toLowerCase();
     if (!normalizedEmail) {
       throw new BadRequestException('Email requerido');
@@ -1492,10 +1550,22 @@ export class ProjectsService {
       throw new ConflictException('Owner ya es miembro implícito');
     }
 
+    const assignedRoleId = roleId ?? (await this.getDefaultRoleId(projectId));
+    const role = await this.prisma.projectRole.findFirst({
+      where: { id: assignedRoleId, projectId },
+      select: { id: true, isOwner: true },
+    });
+    if (!role) {
+      throw new BadRequestException('Rol inválido para este proyecto');
+    }
+    if (role.isOwner) {
+      throw new BadRequestException('No puedes asignar el rol owner');
+    }
+
     const result = await this.prisma.projectMember.upsert({
       where: { projectId_userId: { projectId, userId: member.id } },
-      create: { projectId, userId: member.id, role },
-      update: { role },
+      create: { projectId, userId: member.id, roleId: role.id },
+      update: { roleId: role.id },
     });
     await this.touchProject(projectId);
     return result;
@@ -1505,23 +1575,42 @@ export class ProjectsService {
     user: AccessTokenPayload,
     projectId: string,
     memberUserId: string,
-    role: ProjectMemberRole,
+    roleId: string,
   ) {
-    const p = await this.ensureOwner(user.sub, projectId);
+    const p = await this.ensureProjectPermission(
+      user.sub,
+      projectId,
+      PERMISSION_KEYS.PROJECT_MANAGE_MEMBERS,
+    );
     if (memberUserId === p.ownerId) {
       throw new ConflictException('No puedes cambiar el rol del owner');
     }
 
+    const role = await this.prisma.projectRole.findFirst({
+      where: { id: roleId, projectId },
+      select: { id: true, isOwner: true },
+    });
+    if (!role) {
+      throw new BadRequestException('Rol inválido para este proyecto');
+    }
+    if (role.isOwner) {
+      throw new BadRequestException('No puedes asignar el rol owner');
+    }
+
     const result = await this.prisma.projectMember.update({
       where: { projectId_userId: { projectId, userId: memberUserId } },
-      data: { role },
+      data: { roleId: role.id },
     });
     await this.touchProject(projectId);
     return result;
   }
 
   async removeMember(user: AccessTokenPayload, projectId: string, memberUserId: string) {
-    const p = await this.ensureOwner(user.sub, projectId);
+    const p = await this.ensureProjectPermission(
+      user.sub,
+      projectId,
+      PERMISSION_KEYS.PROJECT_MANAGE_MEMBERS,
+    );
     if (memberUserId === p.ownerId) {
       throw new ConflictException('No puedes remover al owner');
     }
@@ -1529,6 +1618,146 @@ export class ProjectsService {
     await this.prisma.projectMember.delete({
       where: { projectId_userId: { projectId, userId: memberUserId } },
     });
+    await this.touchProject(projectId);
+    return { ok: true };
+  }
+
+  /** === Roles (owner/maintainer) === */
+  async listRoles(user: AccessTokenPayload, projectId: string) {
+    await this.ensureProjectPermission(user.sub, projectId, PERMISSION_KEYS.PROJECT_READ);
+    const roles = await this.prisma.projectRole.findMany({
+      where: { projectId },
+      orderBy: [{ isOwner: 'desc' }, { createdAt: 'asc' }],
+      include: {
+        rolePermissions: { select: { permission: { select: { key: true } } } },
+        _count: { select: { members: true } },
+      },
+    });
+    return roles.map((role) => ({
+      id: role.id,
+      name: role.name,
+      description: role.description,
+      isOwner: role.isOwner,
+      isDefault: role.isDefault,
+      permissionKeys: role.rolePermissions.map((rp) => rp.permission.key),
+      memberCount: role._count.members,
+    }));
+  }
+
+  async listPermissions(user: AccessTokenPayload, projectId: string) {
+    await this.ensureProjectPermission(user.sub, projectId, PERMISSION_KEYS.PROJECT_READ);
+    await ensurePermissionsExist(this.prisma, Object.values(PERMISSION_KEYS) as PermissionKey[]);
+    const permissions = await this.prisma.permission.findMany({
+      orderBy: { key: 'asc' },
+      select: { key: true, description: true },
+    });
+    return { items: permissions };
+  }
+
+  async createRole(
+    user: AccessTokenPayload,
+    projectId: string,
+    dto: { name: string; description?: string; permissionKeys: string[] },
+  ) {
+    await this.ensureProjectPermission(user.sub, projectId, PERMISSION_KEYS.PROJECT_MANAGE_ROLES);
+    const permissionKeys = this.normalizePermissionKeys(dto.permissionKeys ?? []);
+    await ensurePermissionsExist(this.prisma, permissionKeys);
+    const permissionIds = await fetchPermissionIds(this.prisma, permissionKeys);
+    const created = await this.prisma.projectRole.create({
+      data: {
+        projectId,
+        name: dto.name.trim(),
+        description: dto.description?.trim() ?? null,
+        isOwner: false,
+        isDefault: false,
+        rolePermissions: {
+          create: permissionKeys.map((key) => ({ permissionId: permissionIds.get(key)! })),
+        },
+      },
+      include: {
+        rolePermissions: { select: { permission: { select: { key: true } } } },
+      },
+    });
+    await this.touchProject(projectId);
+    return {
+      id: created.id,
+      name: created.name,
+      description: created.description,
+      isOwner: created.isOwner,
+      isDefault: created.isDefault,
+      permissionKeys: created.rolePermissions.map((rp) => rp.permission.key),
+    };
+  }
+
+  async updateRole(
+    user: AccessTokenPayload,
+    projectId: string,
+    roleId: string,
+    dto: { name?: string; description?: string; permissionKeys?: string[] },
+  ) {
+    await this.ensureProjectPermission(user.sub, projectId, PERMISSION_KEYS.PROJECT_MANAGE_ROLES);
+    const role = await this.prisma.projectRole.findFirst({
+      where: { id: roleId, projectId },
+      select: { id: true, isOwner: true },
+    });
+    if (!role) throw new NotFoundException('Rol no encontrado');
+    if (
+      role.isOwner &&
+      (dto.name !== undefined || dto.description !== undefined || dto.permissionKeys !== undefined)
+    ) {
+      throw new ConflictException('No puedes editar el rol owner');
+    }
+
+    const data: Prisma.ProjectRoleUpdateInput = {};
+    if (dto.name !== undefined) data.name = dto.name.trim();
+    if (dto.description !== undefined) data.description = dto.description?.trim() ?? null;
+    if (dto.permissionKeys !== undefined) {
+      const permissionKeys = this.normalizePermissionKeys(dto.permissionKeys);
+      await ensurePermissionsExist(this.prisma, permissionKeys);
+      const permissionIds = await fetchPermissionIds(this.prisma, permissionKeys);
+      data.rolePermissions = {
+        deleteMany: {},
+        create: permissionKeys.map((key) => ({ permissionId: permissionIds.get(key)! })),
+      };
+    }
+
+    const updated = await this.prisma.projectRole.update({
+      where: { id: role.id },
+      data,
+      include: {
+        rolePermissions: { select: { permission: { select: { key: true } } } },
+      },
+    });
+    await this.touchProject(projectId);
+    return {
+      id: updated.id,
+      name: updated.name,
+      description: updated.description,
+      isOwner: updated.isOwner,
+      isDefault: updated.isDefault,
+      permissionKeys: updated.rolePermissions.map((rp) => rp.permission.key),
+    };
+  }
+
+  async deleteRole(user: AccessTokenPayload, projectId: string, roleId: string) {
+    await this.ensureProjectPermission(user.sub, projectId, PERMISSION_KEYS.PROJECT_MANAGE_ROLES);
+    const role = await this.prisma.projectRole.findFirst({
+      where: { id: roleId, projectId },
+      select: { id: true, isOwner: true },
+    });
+    if (!role) throw new NotFoundException('Rol no encontrado');
+    if (role.isOwner) {
+      throw new ConflictException('No puedes eliminar el rol owner');
+    }
+
+    const membersCount = await this.prisma.projectMember.count({
+      where: { projectId, roleId: role.id },
+    });
+    if (membersCount > 0) {
+      throw new ConflictException('No puedes eliminar un rol con miembros asignados');
+    }
+
+    await this.prisma.projectRole.delete({ where: { id: role.id } });
     await this.touchProject(projectId);
     return { ok: true };
   }
@@ -1566,7 +1795,11 @@ export class ProjectsService {
       expiresAt?: Date;
     },
   ) {
-    await this.ensureOwner(user.sub, projectId);
+    await this.ensureProjectPermission(
+      user.sub,
+      projectId,
+      PERMISSION_KEYS.PROJECT_MANAGE_INTEGRATIONS,
+    );
 
     const credential = await this.prisma.projectGithubCredential.upsert({
       where: { projectId },
@@ -1591,7 +1824,11 @@ export class ProjectsService {
   }
 
   async deleteProjectGithubCredential(user: AccessTokenPayload, projectId: string) {
-    await this.ensureOwner(user.sub, projectId);
+    await this.ensureProjectPermission(
+      user.sub,
+      projectId,
+      PERMISSION_KEYS.PROJECT_MANAGE_INTEGRATIONS,
+    );
     try {
       await this.prisma.projectGithubCredential.delete({ where: { projectId } });
     } catch {

@@ -4,11 +4,11 @@ import {
   UserRole,
   ProjectStatus,
   Visibility,
-  ProjectMemberRole,
   FeaturePriority,
   FeatureStatus,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { DEFAULT_PROJECT_ROLES, DEFAULT_MEMBER_ROLE_NAME, ensurePermissionsExist, fetchPermissionIds } from '../projects/permissions';
 
 const prisma = new PrismaClient();
 
@@ -57,14 +57,44 @@ async function main() {
       visibility: Visibility.PRIVATE,
       ownerId: admin.id,
       // si quieres vincular repo, pon repositoryUrl aquí
-      members: {
-        create: [
-          { userId: admin.id, role: ProjectMemberRole.OWNER }, // owner también como miembro
-          { userId: dev.id, role: ProjectMemberRole.DEVELOPER },
-          { userId: tester.id, role: ProjectMemberRole.VIEWER },
-        ],
-      },
     },
+  });
+
+  const permissionKeys = Array.from(new Set(DEFAULT_PROJECT_ROLES.flatMap((role) => role.permissions)));
+  await ensurePermissionsExist(prisma, permissionKeys);
+  const permissionIds = await fetchPermissionIds(prisma, permissionKeys);
+
+  const roles = await Promise.all(
+    DEFAULT_PROJECT_ROLES.map((role) =>
+      prisma.projectRole.create({
+        data: {
+          projectId: project.id,
+          name: role.name,
+          description: role.description ?? null,
+          isOwner: role.isOwner,
+          isDefault: role.isDefault,
+          rolePermissions: {
+            create: role.permissions.map((key) => ({ permissionId: permissionIds.get(key)! })),
+          },
+        },
+      }),
+    ),
+  );
+  const roleByName = new Map(roles.map((role) => [role.name, role]));
+  const ownerRole = roles.find((role) => role.isOwner);
+  if (!ownerRole) {
+    throw new Error('Owner role missing in seed');
+  }
+  const developerRole = roleByName.get(DEFAULT_MEMBER_ROLE_NAME) ?? roles.find((role) => !role.isOwner);
+  const viewerRole = roleByName.get('Viewer') ?? roles.find((role) => !role.isOwner && role.id !== developerRole?.id);
+
+  await prisma.projectMember.createMany({
+    data: [
+      { projectId: project.id, userId: admin.id, roleId: ownerRole.id },
+      ...(developerRole ? [{ projectId: project.id, userId: dev.id, roleId: developerRole.id }] : []),
+      ...(viewerRole ? [{ projectId: project.id, userId: tester.id, roleId: viewerRole.id }] : []),
+    ],
+    skipDuplicates: true,
   });
 
   // === Módulos ===

@@ -1,11 +1,12 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
-  DocumentationEntityType,
-  Prisma,
-  ProjectMemberRole,
-  TestEvaluation,
-  TestRunStatus,
-} from '@prisma/client';
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { DocumentationEntityType, Prisma, TestEvaluation, TestRunStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { GoogleCloudStorageService } from 'src/google-cloud-storage/google-cloud-storage.service';
 import { CreateTestCasesDto } from './dto/create-test-cases.dto';
@@ -16,6 +17,12 @@ import { assertProjectRead, assertProjectWrite } from './guards/rbac.helpers';
 import { CreateProjectTestRunDto } from './dto/create-project-test-run.dto';
 import { UpdateTestRunDto } from './dto/update-test-run.dto';
 import { UpdateLinkedFeatureDto } from './dto/update-linked-feature.dto';
+import {
+  PERMISSION_KEYS,
+  type PermissionKey,
+  hasProjectPermission,
+  requireProjectPermission,
+} from 'src/projects/permissions';
 
 const testRunDetailInclude: Prisma.TestRunInclude = {
   feature: {
@@ -198,8 +205,8 @@ type ProjectLabelView = {
   name: string;
   isMandatory: boolean;
   defaultNotApplicable: boolean;
-  visibleToRoles: ProjectMemberRole[];
-  readOnlyRoles: ProjectMemberRole[];
+  visibleRoleIds: string[];
+  readOnlyRoleIds: string[];
   displayOrder: number;
   deletedAt?: Date | null;
   deletedBy?: { id: string; name: string | null; email: string } | null;
@@ -207,15 +214,18 @@ type ProjectLabelView = {
 
 type DocumentationEntry = {
   label: ProjectLabelView;
-  field:
-    | {
-        id: string;
-        content: string | null;
-        isNotApplicable: boolean;
-        updatedAt: Date;
-      }
-    | null;
+  field: {
+    id: string;
+    content: string | null;
+    isNotApplicable: boolean;
+    updatedAt: Date;
+  } | null;
   canEdit: boolean;
+};
+
+type ProjectRoleInfo = {
+  id: string;
+  isOwner: boolean;
 };
 
 type PaginationInput = {
@@ -245,11 +255,6 @@ export class QaService {
     TestEvaluation.MINOR_ISSUE,
     TestEvaluation.PASSED,
   ];
-  private static readonly WRITE_ROLES = new Set<ProjectMemberRole>([
-    ProjectMemberRole.OWNER,
-    ProjectMemberRole.MAINTAINER,
-    ProjectMemberRole.DEVELOPER,
-  ]);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -307,6 +312,10 @@ export class QaService {
     const labels = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     return labels.map((label) => this.mapProjectLabel(label));
   }
@@ -314,9 +323,13 @@ export class QaService {
   async listDeletedProjectLabels(userId: string, projectId: string): Promise<ProjectLabelView[]> {
     await assertProjectRead(this.prisma, userId, projectId);
     const labels = await this.prisma.projectLabel.findMany({
-      where: { projectId, deletedAt: { not: null } }, 
+      where: { projectId, deletedAt: { not: null } },
       orderBy: [{ deletedAt: 'desc' }, { createdAt: 'asc' }],
-      include: { deletedBy: { select: { id: true, name: true, email: true } } },
+      include: {
+        deletedBy: { select: { id: true, name: true, email: true } },
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     return labels.map((label) => this.mapProjectLabel(label));
   }
@@ -328,11 +341,13 @@ export class QaService {
       name: string;
       isMandatory?: boolean;
       defaultNotApplicable?: boolean;
-      visibleToRoles?: ProjectMemberRole[];
-      readOnlyRoles?: ProjectMemberRole[];
+      visibleRoleIds?: string[];
+      readOnlyRoleIds?: string[];
     },
   ): Promise<ProjectLabelView> {
-    await this.assertProjectOwner(userId, projectId);
+    await this.assertProjectLabelManager(userId, projectId);
+    const visibleRoleIds = await this.sanitizeRoleIds(projectId, dto.visibleRoleIds ?? []);
+    const readOnlyRoleIds = await this.sanitizeRoleIds(projectId, dto.readOnlyRoleIds ?? []);
     const lastLabel = await this.prisma.projectLabel.findFirst({
       where: { projectId, deletedAt: null },
       orderBy: { displayOrder: 'desc' },
@@ -346,8 +361,12 @@ export class QaService {
         isMandatory: dto.isMandatory ?? false,
         defaultNotApplicable: dto.defaultNotApplicable ?? false,
         displayOrder: nextOrder,
-        visibleToRoles: dto.visibleToRoles ?? [],
-        readOnlyRoles: dto.readOnlyRoles ?? [],
+        visibleRoles: { create: visibleRoleIds.map((roleId) => ({ roleId })) },
+        readOnlyRoles: { create: readOnlyRoleIds.map((roleId) => ({ roleId })) },
+      },
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
       },
     });
     if (created.defaultNotApplicable) {
@@ -365,11 +384,11 @@ export class QaService {
       name?: string;
       isMandatory?: boolean;
       defaultNotApplicable?: boolean;
-      visibleToRoles?: ProjectMemberRole[];
-      readOnlyRoles?: ProjectMemberRole[];
+      visibleRoleIds?: string[];
+      readOnlyRoleIds?: string[];
     },
   ): Promise<ProjectLabelView> {
-    await this.assertProjectOwner(userId, projectId);
+    await this.assertProjectLabelManager(userId, projectId);
     const label = await this.prisma.projectLabel.findFirst({
       where: { id: labelId, deletedAt: null },
       select: { projectId: true, defaultNotApplicable: true },
@@ -380,12 +399,29 @@ export class QaService {
     const data: Prisma.ProjectLabelUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name.trim();
     if (dto.isMandatory !== undefined) data.isMandatory = dto.isMandatory;
-    if (dto.defaultNotApplicable !== undefined) data.defaultNotApplicable = dto.defaultNotApplicable;
-    if (dto.visibleToRoles !== undefined) data.visibleToRoles = dto.visibleToRoles;
-    if (dto.readOnlyRoles !== undefined) data.readOnlyRoles = dto.readOnlyRoles;
+    if (dto.defaultNotApplicable !== undefined)
+      data.defaultNotApplicable = dto.defaultNotApplicable;
+    if (dto.visibleRoleIds !== undefined) {
+      const visibleRoleIds = await this.sanitizeRoleIds(projectId, dto.visibleRoleIds);
+      data.visibleRoles = {
+        deleteMany: {},
+        create: visibleRoleIds.map((roleId) => ({ roleId })),
+      };
+    }
+    if (dto.readOnlyRoleIds !== undefined) {
+      const readOnlyRoleIds = await this.sanitizeRoleIds(projectId, dto.readOnlyRoleIds);
+      data.readOnlyRoles = {
+        deleteMany: {},
+        create: readOnlyRoleIds.map((roleId) => ({ roleId })),
+      };
+    }
     const updated = await this.prisma.projectLabel.update({
       where: { id: labelId },
       data,
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     if (dto.defaultNotApplicable === true && !label.defaultNotApplicable) {
       await this.createDefaultDocumentationForLabel(projectId, labelId);
@@ -395,7 +431,7 @@ export class QaService {
   }
 
   async deleteProjectLabel(userId: string, projectId: string, labelId: string): Promise<void> {
-    await this.assertProjectOwner(userId, projectId);
+    await this.assertProjectLabelManager(userId, projectId);
     const label = await this.prisma.projectLabel.findFirst({
       where: { id: labelId, deletedAt: null },
       select: { projectId: true },
@@ -410,8 +446,12 @@ export class QaService {
     await this.touchProject(projectId);
   }
 
-  async restoreProjectLabel(userId: string, projectId: string, labelId: string): Promise<ProjectLabelView> {
-    await this.assertProjectOwner(userId, projectId);
+  async restoreProjectLabel(
+    userId: string,
+    projectId: string,
+    labelId: string,
+  ): Promise<ProjectLabelView> {
+    await this.assertProjectLabelManager(userId, projectId);
     const label = await this.prisma.projectLabel.findFirst({
       where: { id: labelId, projectId },
     });
@@ -424,13 +464,22 @@ export class QaService {
     const restored = await this.prisma.projectLabel.update({
       where: { id: labelId },
       data: { deletedAt: null, deletedById: null },
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     await this.touchProject(projectId);
     return this.mapProjectLabel(restored);
   }
 
-  async reorderProjectLabel(userId: string, projectId: string, labelId: string, newIndex: number): Promise<ProjectLabelView[]> {
-    await this.assertProjectOwner(userId, projectId);
+  async reorderProjectLabel(
+    userId: string,
+    projectId: string,
+    labelId: string,
+    newIndex: number,
+  ): Promise<ProjectLabelView[]> {
+    await this.assertProjectLabelManager(userId, projectId);
     const labels = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
@@ -456,6 +505,10 @@ export class QaService {
     const reordered = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     await this.touchProject(projectId);
     return reordered.map((labelRow) => this.mapProjectLabel(labelRow));
@@ -469,6 +522,8 @@ export class QaService {
       projectId,
       entityType: DocumentationEntityType.FEATURE,
       entityId: featureId,
+      readPermission: PERMISSION_KEYS.FEATURE_READ,
+      writePermission: PERMISSION_KEYS.FEATURE_WRITE,
     });
   }
 
@@ -479,6 +534,8 @@ export class QaService {
       projectId,
       entityType: DocumentationEntityType.PROJECT,
       entityId: projectId,
+      readPermission: PERMISSION_KEYS.PROJECT_READ,
+      writePermission: PERMISSION_KEYS.PROJECT_UPDATE,
     });
   }
 
@@ -490,6 +547,8 @@ export class QaService {
       projectId,
       entityType: DocumentationEntityType.MODULE,
       entityId: moduleId,
+      readPermission: PERMISSION_KEYS.MODULE_READ,
+      writePermission: PERMISSION_KEYS.MODULE_WRITE,
     });
   }
 
@@ -563,6 +622,10 @@ export class QaService {
     const labels = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     const labelViews = labels.map((label) => this.mapProjectLabel(label));
     const visibleLabels = labelViews.filter((label) => this.canViewLabel(role, label));
@@ -629,6 +692,10 @@ export class QaService {
     const labels = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: null },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     const labelViews = labels.map((label) => this.mapProjectLabel(label));
     const visibleLabels = labelViews.filter((label) => this.canViewLabel(role, label));
@@ -711,8 +778,18 @@ export class QaService {
     await assertProjectWrite(this.prisma, userId, projectId);
 
     const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const canWrite = await hasProjectPermission(
+      this.prisma,
+      userId,
+      projectId,
+      PERMISSION_KEYS.QA_WRITE,
+    );
     const label = await this.prisma.projectLabel.findFirst({
       where: { id: labelId, deletedAt: null },
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     if (!label || label.projectId !== projectId) {
       throw new BadRequestException('Label not found for this project.');
@@ -721,7 +798,7 @@ export class QaService {
     if (!this.canViewLabel(role, labelView)) {
       throw new ForbiddenException('You cannot use this label.');
     }
-    if (!this.canEditLabel(role, labelView)) {
+    if (!this.canEditLabel(role, labelView, canWrite)) {
       throw new ForbiddenException('You do not have permission to edit this label.');
     }
 
@@ -776,6 +853,12 @@ export class QaService {
     await assertProjectWrite(this.prisma, userId, projectId);
 
     const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const canWrite = await hasProjectPermission(
+      this.prisma,
+      userId,
+      projectId,
+      PERMISSION_KEYS.QA_WRITE,
+    );
     const image = await this.prisma.documentationImage.findFirst({
       where: {
         id: imageId,
@@ -790,8 +873,8 @@ export class QaService {
             name: true,
             isMandatory: true,
             defaultNotApplicable: true,
-            visibleToRoles: true,
-            readOnlyRoles: true,
+            visibleRoles: { select: { roleId: true } },
+            readOnlyRoles: { select: { roleId: true } },
             displayOrder: true,
             deletedAt: true,
             deletedBy: { select: { id: true, name: true, email: true } },
@@ -807,7 +890,7 @@ export class QaService {
     if (!this.canViewLabel(role, labelView)) {
       throw new ForbiddenException('You cannot use this label.');
     }
-    if (!this.canEditLabel(role, labelView)) {
+    if (!this.canEditLabel(role, labelView, canWrite)) {
       throw new ForbiddenException('You do not have permission to edit this label.');
     }
 
@@ -849,6 +932,12 @@ export class QaService {
     await assertProjectWrite(this.prisma, userId, projectId);
 
     const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const canWrite = await hasProjectPermission(
+      this.prisma,
+      userId,
+      projectId,
+      PERMISSION_KEYS.QA_WRITE,
+    );
     const image = await this.prisma.documentationImage.findFirst({
       where: {
         id: imageId,
@@ -863,8 +952,8 @@ export class QaService {
             name: true,
             isMandatory: true,
             defaultNotApplicable: true,
-            visibleToRoles: true,
-            readOnlyRoles: true,
+            visibleRoles: { select: { roleId: true } },
+            readOnlyRoles: { select: { roleId: true } },
             displayOrder: true,
             deletedAt: true,
             deletedBy: { select: { id: true, name: true, email: true } },
@@ -880,7 +969,7 @@ export class QaService {
     if (!this.canViewLabel(role, labelView)) {
       throw new ForbiddenException('You cannot use this label.');
     }
-    if (!this.canEditLabel(role, labelView)) {
+    if (!this.canEditLabel(role, labelView, canWrite)) {
       throw new ForbiddenException('You do not have permission to edit this label.');
     }
 
@@ -958,8 +1047,7 @@ export class QaService {
 
     for (const link of links) {
       const other = link.featureId === featureId ? link.linkedFeature : link.feature;
-      const linkDirection =
-        link.initiatorFeatureId === featureId ? 'references' : 'referenced_by';
+      const linkDirection = link.initiatorFeatureId === featureId ? 'references' : 'referenced_by';
       const summary: LinkedFeatureSummary = {
         id: other.id,
         name: other.name,
@@ -1063,8 +1151,7 @@ export class QaService {
 
     const targetFeatureId = dto.targetFeatureId ?? linkedFeatureId;
     const targetChanged = targetFeatureId !== linkedFeatureId;
-    const nextReason =
-      dto.reason !== undefined ? dto.reason : existing.reason ?? null;
+    const nextReason = dto.reason !== undefined ? dto.reason : (existing.reason ?? null);
 
     if (targetFeatureId === featureId) {
       throw new BadRequestException('Cannot link a feature to itself.');
@@ -1268,7 +1355,7 @@ export class QaService {
         notes: dto.notes,
         targetCaseIds: targetScope.targetCaseIds,
         isTargetScopeCustom: targetScope.isCustom,
-        status: dto.status ?? TestRunStatus.OPEN
+        status: dto.status ?? TestRunStatus.OPEN,
       },
     });
 
@@ -1286,10 +1373,20 @@ export class QaService {
     return this.getTestRunDetail(run.id);
   }
 
-  async updateTestRun(userId: string, runId: string, dto: UpdateTestRunDto): Promise<TestRunDetail> {
+  async updateTestRun(
+    userId: string,
+    runId: string,
+    dto: UpdateTestRunDto,
+  ): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
-      select: { id: true, projectId: true, featureId: true, targetCaseIds: true, isTargetScopeCustom: true },
+      select: {
+        id: true,
+        projectId: true,
+        featureId: true,
+        targetCaseIds: true,
+        isTargetScopeCustom: true,
+      },
     });
     if (!run) {
       throw new NotFoundException('Test run not found.');
@@ -1457,7 +1554,13 @@ export class QaService {
   ): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
-      select: { id: true, featureId: true, projectId: true, targetCaseIds: true, isTargetScopeCustom: true },
+      select: {
+        id: true,
+        featureId: true,
+        projectId: true,
+        targetCaseIds: true,
+        isTargetScopeCustom: true,
+      },
     });
     if (!run) {
       throw new NotFoundException('Test run not found.');
@@ -1565,7 +1668,7 @@ export class QaService {
       by: run.runBy?.name ?? null,
       status: run.status,
       summary: this.buildSummary(run.results.map((r) => r.evaluation)),
-      totalTestCases : run.targetCaseIds.length > 0 ? run.targetCaseIds.length : 0,
+      totalTestCases: run.targetCaseIds.length > 0 ? run.targetCaseIds.length : 0,
     }));
   }
 
@@ -1910,9 +2013,13 @@ export class QaService {
     const runsWithFullPass = latestRunDetails
       .filter(
         ({ coverage }) =>
-          coverage.totalCases > 0 && coverage.executedCases === coverage.totalCases && coverage.missingCases === 0,
+          coverage.totalCases > 0 &&
+          coverage.executedCases === coverage.totalCases &&
+          coverage.missingCases === 0,
       )
-      .filter(({ run }) => run.results.every((result) => result.evaluation === TestEvaluation.PASSED))
+      .filter(({ run }) =>
+        run.results.every((result) => result.evaluation === TestEvaluation.PASSED),
+      )
       .map(({ run, coverage }) => ({
         id: run.id,
         runDate: run.runDate,
@@ -1972,7 +2079,8 @@ export class QaService {
     await assertProjectRead(this.prisma, userId, projectId);
     const data = await this.buildProjectDashboardData(projectId);
     const requestedType = options.filters?.type?.toUpperCase();
-    const filterType = requestedType === 'FEATURE' || requestedType === 'MODULE' ? requestedType : null;
+    const filterType =
+      requestedType === 'FEATURE' || requestedType === 'MODULE' ? requestedType : null;
     const items = filterType
       ? data.reports.entitiesMissingMandatoryDocumentation.filter(
           (item) => item.entityType === filterType,
@@ -2250,7 +2358,10 @@ export class QaService {
     }
   }
 
-  private async listScopeTestCaseIds(projectId: string, featureId: string | null): Promise<string[]> {
+  private async listScopeTestCaseIds(
+    projectId: string,
+    featureId: string | null,
+  ): Promise<string[]> {
     if (featureId) {
       const cases = await this.prisma.testCase.findMany({
         where: { featureId, isArchived: false },
@@ -2313,7 +2424,9 @@ export class QaService {
   }
 
   private calculatePassRate(run: TestRunRecord, coverage: RunCoverage): number | null {
-    const passed = run.results.filter((result) => result.evaluation === TestEvaluation.PASSED).length;
+    const passed = run.results.filter(
+      (result) => result.evaluation === TestEvaluation.PASSED,
+    ).length;
     const denominator = coverage.totalCases > 0 ? coverage.totalCases : run.results.length;
     if (denominator === 0) {
       return null;
@@ -2459,7 +2572,10 @@ export class QaService {
     });
   }
 
-  private async getProjectMemberRole(userId: string, projectId: string): Promise<ProjectMemberRole | null> {
+  private async getProjectMemberRole(
+    userId: string,
+    projectId: string,
+  ): Promise<ProjectRoleInfo | null> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { deletedAt: true },
@@ -2469,7 +2585,7 @@ export class QaService {
     }
     const membership = await this.prisma.projectMember.findUnique({
       where: { projectId_userId: { projectId, userId } },
-      select: { role: true },
+      select: { role: { select: { id: true, isOwner: true } } },
     });
     return membership?.role ?? null;
   }
@@ -2548,11 +2664,19 @@ export class QaService {
     await this.touchModule(feature.moduleId);
   }
 
-  private async assertProjectOwner(userId: string, projectId: string): Promise<void> {
-    const role = await this.getProjectMemberRole(userId, projectId);
-    if (role !== ProjectMemberRole.OWNER) {
-      throw new ForbiddenException('Only the project owner can manage labels.');
-    }
+  private async assertProjectLabelManager(userId: string, projectId: string): Promise<void> {
+    await requireProjectPermission(this.prisma, userId, projectId, PERMISSION_KEYS.LABELS_MANAGE);
+  }
+
+  private async sanitizeRoleIds(projectId: string, roleIds: string[]): Promise<string[]> {
+    const uniqueIds = Array.from(new Set(roleIds));
+    if (uniqueIds.length === 0) return [];
+    const roles = await this.prisma.projectRole.findMany({
+      where: { projectId, id: { in: uniqueIds } },
+      select: { id: true },
+    });
+    const allowed = new Set(roles.map((role) => role.id));
+    return uniqueIds.filter((id) => allowed.has(id));
   }
 
   private mapProjectLabel(label: {
@@ -2560,8 +2684,8 @@ export class QaService {
     name: string;
     isMandatory: boolean;
     defaultNotApplicable: boolean;
-    visibleToRoles: ProjectMemberRole[];
-    readOnlyRoles: ProjectMemberRole[];
+    visibleRoles?: Array<{ roleId: string }>;
+    readOnlyRoles?: Array<{ roleId: string }>;
     displayOrder: number;
     deletedAt?: Date | null;
     deletedBy?: { id: string; name: string | null; email: string } | null;
@@ -2571,35 +2695,48 @@ export class QaService {
       name: label.name,
       isMandatory: label.isMandatory,
       defaultNotApplicable: label.defaultNotApplicable ?? false,
-      visibleToRoles: label.visibleToRoles ?? [],
-      readOnlyRoles: label.readOnlyRoles ?? [],
+      visibleRoleIds: (label.visibleRoles ?? []).map((entry) => entry.roleId),
+      readOnlyRoleIds: (label.readOnlyRoles ?? []).map((entry) => entry.roleId),
       displayOrder: label.displayOrder ?? 0,
       deletedAt: label.deletedAt ?? null,
       deletedBy: label.deletedBy,
     };
   }
 
-  private canViewLabel(role: ProjectMemberRole, label: ProjectLabelView): boolean {
-    if (role === ProjectMemberRole.OWNER) {
+  private canViewLabel(
+    role: ProjectRoleInfo | null,
+    label: ProjectLabelView,
+    canRead: boolean = true,
+  ): boolean {
+    if (!canRead) {
+      return false;
+    }
+    if (role?.isOwner) {
       return true;
     }
-    if (!label.visibleToRoles || label.visibleToRoles.length === 0) {
+    if (!label.visibleRoleIds || label.visibleRoleIds.length === 0) {
       return true;
     }
-    return label.visibleToRoles.includes(role);
+    if (!role) return false;
+    return label.visibleRoleIds.includes(role.id);
   }
 
-  private canEditLabel(role: ProjectMemberRole, label: ProjectLabelView): boolean {
+  private canEditLabel(
+    role: ProjectRoleInfo | null,
+    label: ProjectLabelView,
+    canWrite: boolean,
+  ): boolean {
     if (!this.canViewLabel(role, label)) {
       return false;
     }
-    if (!QaService.WRITE_ROLES.has(role)) {
+    if (!canWrite) {
       return false;
     }
-    if (role === ProjectMemberRole.OWNER) {
+    if (role?.isOwner) {
       return true;
     }
-    return !label.readOnlyRoles.includes(role);
+    if (!role) return false;
+    return !label.readOnlyRoleIds.includes(role.id);
   }
 
   private async listDocumentationEntries(params: {
@@ -2607,12 +2744,20 @@ export class QaService {
     projectId: string;
     entityType: DocumentationEntityType;
     entityId: string;
+    readPermission: PermissionKey;
+    writePermission: PermissionKey;
   }): Promise<DocumentationEntry[]> {
-    const { userId, projectId, entityType, entityId } = params;
+    const { userId, projectId, entityType, entityId, readPermission, writePermission } = params;
     const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const canRead = await hasProjectPermission(this.prisma, userId, projectId, readPermission);
+    const canWrite = await hasProjectPermission(this.prisma, userId, projectId, writePermission);
     const labels = await this.prisma.projectLabel.findMany({
       where: { projectId, deletedAt: null },
       orderBy: { createdAt: 'asc' },
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     const labelViews = labels.map((label) => this.mapProjectLabel(label));
     const records = await this.prisma.documentationField.findMany({
@@ -2627,7 +2772,7 @@ export class QaService {
     const recordMap = new Map(records.map((record) => [record.labelId, record]));
 
     return labelViews
-      .filter((label) => this.canViewLabel(role, label))
+      .filter((label) => this.canViewLabel(role, label, canRead))
       .map((label) => {
         const record = recordMap.get(label.id);
         return {
@@ -2640,12 +2785,15 @@ export class QaService {
                 updatedAt: record.updatedAt,
               }
             : null,
-          canEdit: this.canEditLabel(role, label),
+          canEdit: this.canEditLabel(role, label, canWrite),
         };
       });
   }
 
-  private async createDefaultDocumentationForLabel(projectId: string, labelId: string): Promise<void> {
+  private async createDefaultDocumentationForLabel(
+    projectId: string,
+    labelId: string,
+  ): Promise<void> {
     const [modules, features] = await this.prisma.$transaction([
       this.prisma.module.findMany({
         where: { projectId, deletedAt: null },
@@ -2730,8 +2878,18 @@ export class QaService {
   }): Promise<void> {
     const { userId, projectId, entityType, entityId, labelId, dto } = params;
     const role = await this.getProjectMemberRoleOrThrow(userId, projectId);
+    const canWrite = await hasProjectPermission(
+      this.prisma,
+      userId,
+      projectId,
+      PERMISSION_KEYS.QA_WRITE,
+    );
     const label = await this.prisma.projectLabel.findFirst({
       where: { id: labelId, deletedAt: null },
+      include: {
+        visibleRoles: { select: { roleId: true } },
+        readOnlyRoles: { select: { roleId: true } },
+      },
     });
     if (!label || label.projectId !== projectId) {
       throw new BadRequestException('Label not found for this project.');
@@ -2740,7 +2898,7 @@ export class QaService {
     if (!this.canViewLabel(role, labelView)) {
       throw new ForbiddenException('You cannot use this label.');
     }
-    if (!this.canEditLabel(role, labelView)) {
+    if (!this.canEditLabel(role, labelView, canWrite)) {
       throw new ForbiddenException('You do not have permission to edit this label.');
     }
 
@@ -2803,7 +2961,10 @@ export class QaService {
     }
   }
 
-  private async getProjectMemberRoleOrThrow(userId: string, projectId: string): Promise<ProjectMemberRole> {
+  private async getProjectMemberRoleOrThrow(
+    userId: string,
+    projectId: string,
+  ): Promise<ProjectRoleInfo> {
     const role = await this.getProjectMemberRole(userId, projectId);
     if (!role) {
       throw new ForbiddenException('Access denied for project.');

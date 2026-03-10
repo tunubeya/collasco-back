@@ -14,13 +14,12 @@ import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
 import { CommitSummary, GithubService } from 'src/github/github.service';
 import { SyncCommitsDto } from './dto/sync-commits.dto';
-import { DocumentationEntityType, FeatureStatus, Prisma, ProjectMemberRole, ReviewStatus } from '@prisma/client';
+import { DocumentationEntityType, FeatureStatus, Prisma, ReviewStatus } from '@prisma/client';
 import { createHash } from 'crypto';
 import { MoveDirection } from 'src/common/dto/move-order.dto';
+import { PERMISSION_KEYS, type PermissionKey, requireProjectPermission } from 'src/projects/permissions';
 
 type Allowed = 'READ' | 'WRITE';
-const READ_ROLES: ProjectMemberRole[] = ['OWNER', 'MAINTAINER', 'DEVELOPER', 'VIEWER'];
-const WRITE_ROLES: ProjectMemberRole[] = ['OWNER', 'MAINTAINER'];
 
 type NeighborCandidate = {
   type: 'module' | 'feature';
@@ -96,17 +95,10 @@ export class FeaturesService {
       select: { ownerId: true },
     });
     if (!p) throw new NotFoundException('Project not found');
-    if (p.ownerId === userId) return { role: 'OWNER' as const };
-
-    const m = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId, userId } },
-      select: { role: true },
-    });
-    if (!m) throw new ForbiddenException('Not a project member');
-
-    const roles = allowed === 'READ' ? READ_ROLES : WRITE_ROLES;
-    if (!roles.includes(m.role)) throw new ForbiddenException('Insufficient role');
-    return m;
+    const permission: PermissionKey =
+      allowed === 'READ' ? PERMISSION_KEYS.FEATURE_READ : PERMISSION_KEYS.FEATURE_WRITE;
+    await requireProjectPermission(this.prisma, userId, projectId, permission);
+    return { ok: true };
   }
 
   private async requireModule(user: AccessTokenPayload, moduleId: string, allowed: Allowed) {

@@ -21,15 +21,16 @@ import type { AccessTokenPayload } from '../auth/types/jwt-payload';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { ListIssuesDto, ListPullsDto } from 'src/github/dto/list.dto';
 import { JwtAccessGuard } from 'src/auth/guards/jwt-access.guard';
-import { IsEnum } from 'class-validator';
-import { ProjectMemberRole } from '@prisma/client';
+import { IsUUID } from 'class-validator';
 import { UpdateDocumentationLabelPreferencesDto } from './dto/update-documentation-label-preferences.dto';
 import { CreateManualShareLinkDto } from './dto/create-manual-share-link.dto';
 import { ListManualShareLinksDto } from './dto/list-manual-share-links.dto';
+import { CreateProjectRoleDto } from './dto/create-project-role.dto';
+import { UpdateProjectRoleDto } from './dto/update-project-role.dto';
 
 class UpdateMemberRoleDto {
-  @IsEnum(ProjectMemberRole)
-  role!: ProjectMemberRole
+  @IsUUID()
+  roleId!: string
 }
 class UpsertProjectGithubCredentialDto {
   accessToken!: string; // ⚠️ en producción: cifra en reposo
@@ -164,7 +165,7 @@ export class ProjectsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AddMemberDto,
   ) {
-    return this.service.addMember(user, id, dto.email, dto.role);
+    return this.service.addMember(user, id, dto.email, dto.roleId);
   }
   @Patch(':id/members/:userId')
   async updateMemberRole(
@@ -173,7 +174,7 @@ export class ProjectsController {
     @Param('userId') memberUserId: string,
     @Body() dto: UpdateMemberRoleDto,
   ) {
-    return this.service.updateMemberRole(user, id, memberUserId, dto.role);
+    return this.service.updateMemberRole(user, id, memberUserId, dto.roleId);
   }
   @Delete(':id/members/:userId')
   async removeMember(
@@ -190,6 +191,50 @@ export class ProjectsController {
   ) {
     const project = await this.service.findOne(user, id);
     return project!.members;
+  }
+
+  @Get(':id/roles')
+  async listRoles(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.service.listRoles(user, id);
+  }
+
+  @Get(':id/permissions')
+  async listPermissions(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.service.listPermissions(user, id);
+  }
+
+  @Post(':id/roles')
+  async createRole(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreateProjectRoleDto,
+  ) {
+    return this.service.createRole(user, id, dto);
+  }
+
+  @Patch(':id/roles/:roleId')
+  async updateRole(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('roleId', new ParseUUIDPipe()) roleId: string,
+    @Body() dto: UpdateProjectRoleDto,
+  ) {
+    return this.service.updateRole(user, id, roleId, dto);
+  }
+
+  @Delete(':id/roles/:roleId')
+  async deleteRole(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('roleId', new ParseUUIDPipe()) roleId: string,
+  ) {
+    return this.service.deleteRole(user, id, roleId);
   }
 
   // Issues del repo vinculado

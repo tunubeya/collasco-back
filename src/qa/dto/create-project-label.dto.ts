@@ -1,5 +1,4 @@
-import { ProjectMemberRole } from '@prisma/client';
-import { ArrayUnique, IsArray, IsBoolean, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { ArrayUnique, IsArray, IsBoolean, IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
 
 export class CreateProjectLabelDto {
   @IsString()
@@ -17,12 +16,14 @@ export class CreateProjectLabelDto {
   @IsOptional()
   @IsArray()
   @ArrayUnique()
-  @IsEnum(ProjectMemberRole, { each: true })
-  visibleToRoles?: ProjectMemberRole[];
+  @IsUUID('4', { each: true })
+  // roleIds que pueden ver el label (si vacío, visible para todos)
+  visibleRoleIds?: string[];
 
   @IsOptional()
   @IsArray()
   @ArrayUnique()
-  @IsEnum(ProjectMemberRole, { each: true })
-  readOnlyRoles?: ProjectMemberRole[];
+  @IsUUID('4', { each: true })
+  // roleIds que pueden ver pero no editar el label
+  readOnlyRoleIds?: string[];
 }

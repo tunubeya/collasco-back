@@ -13,12 +13,6 @@ enum UserRole {
   TESTER
 }
 
-enum ProjectMemberRole {
-  OWNER
-  MAINTAINER
-  DEVELOPER
-  VIEWER
-}
 
 enum ProjectStatus {
   ACTIVE
@@ -157,6 +151,7 @@ model Project {
   owner            User                     @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   // 🔥 Miembros N:M con rol
   members          ProjectMember[]
+  roles            ProjectRole[]
   // 🔥 Credencial GitHub 1:1 (token del repo/proyecto)
   githubCredential ProjectGithubCredential?
   // Estructura funcional
@@ -196,14 +191,58 @@ model ManualShareLink {
 model ProjectMember {
   projectId String
   userId    String
-  role      ProjectMemberRole @default(DEVELOPER)
+  roleId    String
   joinedAt  DateTime          @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role    ProjectRole @relation(fields: [roleId], references: [id], onDelete: Restrict)
 
   @@id([projectId, userId])
   @@index([userId])
+  @@index([roleId])
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions ProjectRolePermission[]
+}
+
+model ProjectRole {
+  id          String   @id @default(uuid())
+  projectId   String
+  name        String
+  description String?
+  isOwner     Boolean  @default(false)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project           Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  members           ProjectMember[]
+  rolePermissions   ProjectRolePermission[]
+  visibleInLabels   ProjectLabelVisibleRole[]
+  readOnlyInLabels  ProjectLabelReadOnlyRole[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+}
+
+model ProjectRolePermission {
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       ProjectRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
 }
 
 model ProjectGithubCredential {
@@ -441,8 +480,6 @@ model ProjectLabel {
   isMandatory    Boolean             @default(false)
   defaultNotApplicable Boolean       @default(false)
   displayOrder   Int                 @default(0)
-  visibleToRoles ProjectMemberRole[] @default([])
-  readOnlyRoles  ProjectMemberRole[] @default([])
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
   deletedAt      DateTime?
@@ -452,11 +489,35 @@ model ProjectLabel {
   deletedBy           User?                @relation("ProjectLabelDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   documentationFields DocumentationField[]
   documentationImages DocumentationImage[]
+  visibleRoles        ProjectLabelVisibleRole[]
+  readOnlyRoles       ProjectLabelReadOnlyRole[]
 
   @@unique([projectId, name])
   @@index([projectId])
   @@index([projectId, displayOrder])
   @@index([deletedAt])
+}
+
+model ProjectLabelVisibleRole {
+  labelId String
+  roleId  String
+
+  label ProjectLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+  role  ProjectRole  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([labelId, roleId])
+  @@index([roleId])
+}
+
+model ProjectLabelReadOnlyRole {
+  labelId String
+  roleId  String
+
+  label ProjectLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+  role  ProjectRole  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([labelId, roleId])
+  @@index([roleId])
 }
 
 model DocumentationImage {

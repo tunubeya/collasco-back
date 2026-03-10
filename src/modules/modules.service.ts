@@ -11,12 +11,11 @@ import type { CreateModuleDto } from './dto/create-module.dto';
 import type { UpdateModuleDto } from './dto/update-module.dto';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { buildSort, clampPageLimit, like } from 'src/common/utils/pagination';
-import { DocumentationEntityType, Prisma, ProjectMemberRole } from '@prisma/client';
+import { DocumentationEntityType, Prisma } from '@prisma/client';
 import { MoveDirection } from 'src/common/dto/move-order.dto';
+import { PERMISSION_KEYS, type PermissionKey, requireProjectPermission } from 'src/projects/permissions';
 
 type Allowed = 'READ' | 'WRITE';
-const READ_ROLES: ProjectMemberRole[] = ['OWNER', 'MAINTAINER', 'DEVELOPER', 'VIEWER'];
-const WRITE_ROLES: ProjectMemberRole[] = ['OWNER', 'MAINTAINER'];
 
 
 /** stringify estable + hash (sin archivo nuevo) */
@@ -143,17 +142,10 @@ export class ModulesService {
     });
     if (!project) throw new NotFoundException('Project not found');
 
-    if (project.ownerId === userId) return { role: 'OWNER' as const };
-
-    const membership = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId, userId } },
-      select: { role: true },
-    });
-    if (!membership) throw new ForbiddenException('Not a project member');
-
-    const roles = allowed === 'READ' ? READ_ROLES : WRITE_ROLES;
-    if (!roles.includes(membership.role)) throw new ForbiddenException('Insufficient role');
-    return membership;
+    const permission: PermissionKey =
+      allowed === 'READ' ? PERMISSION_KEYS.MODULE_READ : PERMISSION_KEYS.MODULE_WRITE;
+    await requireProjectPermission(this.prisma, userId, projectId, permission);
+    return { ok: true };
   }
 
   private async requireModule(user: AccessTokenPayload, moduleId: string, allowed: Allowed) {
