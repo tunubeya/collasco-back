@@ -93,6 +93,7 @@ model User {
   deletedFeatures  Feature[]          @relation("FeatureDeletedBy")
   deletedProjectLabels ProjectLabel[] @relation("ProjectLabelDeletedBy")
   createdDocumentationImages DocumentationImage[] @relation("DocumentationImageCreatedBy")
+  notifications               Notification[]
 }
 
 model UserRefreshToken {
@@ -563,6 +564,29 @@ model DocumentationField {
   @@index([featureId])
   @@index([moduleId])
   @@index([projectId])
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      NotificationType @default(INFO)
+  isRead    Boolean          @default(false)
+  data      Json?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, isRead])
 }
 
 model UserProjectPreference {
