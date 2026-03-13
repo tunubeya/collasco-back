@@ -38,6 +38,16 @@ export class TicketsController {
     return this.ticketsService.searchFeaturesForAutocomplete(projectId, query || '', user);
   }
 
+  @Get('tickets/mine')
+  findMyTickets(@Query() pagination: PaginationDto, @CurrentUser() user: AccessTokenPayload) {
+    return this.ticketsService.findMyTickets(pagination, user);
+  }
+
+  @Get('tickets/assigned')
+  findAssignedTickets(@Query() pagination: PaginationDto, @CurrentUser() user: AccessTokenPayload) {
+    return this.ticketsService.findAssignedTickets(pagination, user);
+  }
+
   @Get('tickets/:id')
   findById(@Param('id') id: string, @CurrentUser() user: AccessTokenPayload) {
     return this.ticketsService.findById(id, user);
@@ -68,15 +78,5 @@ export class TicketsController {
     @CurrentUser() user: AccessTokenPayload,
   ) {
     return this.ticketsService.findByFeature(featureId, user, pagination);
-  }
-
-  @Get('tickets/mine')
-  findMyTickets(@Query() pagination: PaginationDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.ticketsService.findMyTickets(pagination, user);
-  }
-
-  @Get('tickets/assigned')
-  findAssignedTickets(@Query() pagination: PaginationDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.ticketsService.findAssignedTickets(pagination, user);
   }
 }
