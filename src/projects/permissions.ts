@@ -17,6 +17,11 @@ export const PERMISSION_KEYS = {
   QA_READ: 'qa.read',
   QA_WRITE: 'qa.write',
   LABELS_MANAGE: 'labels.manage',
+  TICKET_READ_OWN: 'ticket.read_own',
+  TICKET_READ_ALL: 'ticket.read_all',
+  TICKET_CREATE: 'ticket.create',
+  TICKET_RESPOND: 'ticket.respond',
+  TICKET_MANAGE: 'ticket.manage',
 } as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[keyof typeof PERMISSION_KEYS];
@@ -54,6 +59,10 @@ export const DEFAULT_PROJECT_ROLES: ProjectRoleDefaults[] = [
       PERMISSION_KEYS.FEATURE_WRITE,
       PERMISSION_KEYS.QA_READ,
       PERMISSION_KEYS.QA_WRITE,
+      PERMISSION_KEYS.TICKET_READ_ALL,
+      PERMISSION_KEYS.TICKET_CREATE,
+      PERMISSION_KEYS.TICKET_RESPOND,
+      PERMISSION_KEYS.TICKET_MANAGE,
     ],
   },
   {
@@ -67,6 +76,8 @@ export const DEFAULT_PROJECT_ROLES: ProjectRoleDefaults[] = [
       PERMISSION_KEYS.FEATURE_READ,
       PERMISSION_KEYS.QA_READ,
       PERMISSION_KEYS.QA_WRITE,
+      PERMISSION_KEYS.TICKET_READ_ALL,
+      PERMISSION_KEYS.TICKET_RESPOND,
     ],
   },
   {
@@ -79,6 +90,18 @@ export const DEFAULT_PROJECT_ROLES: ProjectRoleDefaults[] = [
       PERMISSION_KEYS.MODULE_READ,
       PERMISSION_KEYS.FEATURE_READ,
       PERMISSION_KEYS.QA_READ,
+      PERMISSION_KEYS.TICKET_READ_ALL,
+    ],
+  },
+  {
+    name: 'Client',
+    description: 'Can create and view own tickets.',
+    isOwner: false,
+    isDefault: false,
+    permissions: [
+      PERMISSION_KEYS.PROJECT_READ,
+      PERMISSION_KEYS.TICKET_READ_OWN,
+      PERMISSION_KEYS.TICKET_CREATE,
     ],
   },
 ];

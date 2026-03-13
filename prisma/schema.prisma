@@ -94,6 +94,9 @@ model User {
   deletedProjectLabels ProjectLabel[] @relation("ProjectLabelDeletedBy")
   createdDocumentationImages DocumentationImage[] @relation("DocumentationImageCreatedBy")
   notifications               Notification[]
+  createdTickets              Ticket[]          @relation("TicketCreatedBy")
+  assignedTickets             Ticket[]          @relation("TicketAssignee")
+  ticketSections              TicketSection[]
 }
 
 model UserRefreshToken {
@@ -163,6 +166,7 @@ model Project {
   userPreferences  UserProjectPreference[]
   manualShareLinks ManualShareLink[]
   documentationImages DocumentationImage[]
+  tickets            Ticket[]
   deletedAt        DateTime?
   deletedById      String?
   deletedBy        User?                    @relation("ProjectDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
@@ -348,6 +352,7 @@ model Feature {
   linkedByFeatures   FeatureLink[]    @relation("FeatureLink_linked")
   initiatedLinks     FeatureLink[]    @relation("FeatureLink_initiator")
   documentationFields DocumentationField[] @relation("FeatureDocumentation")
+  tickets             Ticket[]
 
   @@unique([moduleId, name])
   @@index([publishedVersionId])
@@ -587,6 +592,57 @@ model Notification {
 
   @@index([userId])
   @@index([userId, isRead])
+}
+
+enum TicketStatus {
+  OPEN
+  PENDING
+  RESOLVED
+}
+
+enum TicketSectionType {
+  DESCRIPTION
+  RESPONSE
+  COMMENT
+}
+
+model Ticket {
+  id          String         @id @default(uuid())
+  projectId   String
+  featureId   String?
+  title       String
+  assigneeId  String?
+  status      TicketStatus   @default(OPEN)
+  createdById String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  feature     Feature?       @relation(fields: [featureId], references: [id], onDelete: SetNull)
+  assignee    User?          @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy   User           @relation("TicketCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  sections    TicketSection[]
+
+  @@index([projectId])
+  @@index([featureId])
+  @@index([createdById])
+}
+
+model TicketSection {
+  id          String           @id @default(uuid())
+  ticketId    String
+  type        TicketSectionType
+  title       String?
+  content     String
+  authorId    String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  ticket      Ticket           @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author      User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@index([authorId])
 }
 
 model UserProjectPreference {
