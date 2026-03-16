@@ -282,11 +282,29 @@ export class TicketsService {
         name: { contains: query, mode: 'insensitive' },
         deletedAt: null,
       },
-      select: { id: true, name: true, moduleId: true },
+      include: {
+        module: {
+          include: { parent: { select: { name: true, path: true } } },
+        },
+      },
       take: 10,
     });
 
-    return features;
+    return features.map((f) => {
+      const modulePath = f.module.path || f.module.name;
+      const parentPath = f.module.parent?.path || f.module.parent?.name || '';
+      const fullPath = parentPath
+        ? `${parentPath}/${modulePath}/${f.name}`
+        : `${modulePath}/${f.name}`;
+
+      return {
+        id: f.id,
+        name: f.name,
+        moduleId: f.moduleId,
+        projectId,
+        path: fullPath,
+      };
+    });
   }
 
   async findMyTickets(pagination: PaginationDto, user: AccessTokenPayload) {
