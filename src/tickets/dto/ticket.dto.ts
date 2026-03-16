@@ -58,3 +58,15 @@ export class CreateTicketSectionDto {
   @MaxLength(200)
   title?: string;
 }
+
+export class UpdateTicketSectionDto {
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  content?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  title?: string;
+}

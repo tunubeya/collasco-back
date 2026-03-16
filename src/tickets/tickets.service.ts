@@ -1,6 +1,16 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateTicketDto, UpdateTicketDto, CreateTicketSectionDto } from './dto/ticket.dto';
+import {
+  CreateTicketDto,
+  UpdateTicketDto,
+  CreateTicketSectionDto,
+  UpdateTicketSectionDto,
+} from './dto/ticket.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import {
   PERMISSION_KEYS,
@@ -10,12 +20,14 @@ import {
 import type { AccessTokenPayload } from '../auth/types/jwt-payload';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/dto/create-notification.dto';
+import { GoogleCloudStorageService } from '../google-cloud-storage/google-cloud-storage.service';
 
 @Injectable()
 export class TicketsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
+    private readonly gcsService: GoogleCloudStorageService,
   ) {}
 
   async create(projectId: string, dto: CreateTicketDto, user: AccessTokenPayload) {
@@ -195,6 +207,71 @@ export class TicketsService {
     return section;
   }
 
+  async updateSection(
+    ticketId: string,
+    sectionId: string,
+    dto: UpdateTicketSectionDto,
+    user: AccessTokenPayload,
+  ) {
+    const section = await this.prisma.ticketSection.findFirst({
+      where: { id: sectionId, ticketId },
+      include: { ticket: { select: { projectId: true, createdById: true } } },
+    });
+    if (!section) throw new NotFoundException('Section not found');
+
+    const isAuthor = section.authorId === user.sub;
+    const canManage = await hasProjectPermission(
+      this.prisma,
+      user.sub,
+      section.ticket.projectId,
+      PERMISSION_KEYS.TICKET_MANAGE,
+    );
+
+    if (!isAuthor && !canManage) {
+      throw new ForbiddenException('You can only edit your own sections');
+    }
+
+    return this.prisma.ticketSection.update({
+      where: { id: sectionId },
+      data: {
+        content: dto.content,
+        title: dto.title,
+      },
+      include: {
+        author: { select: { id: true, name: true, email: true } },
+      },
+    });
+  }
+
+  async delete(ticketId: string, user: AccessTokenPayload) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      include: { images: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    const canManage = await hasProjectPermission(
+      this.prisma,
+      user.sub,
+      ticket.projectId,
+      PERMISSION_KEYS.TICKET_MANAGE,
+    );
+    const isOwner = ticket.createdById === user.sub;
+
+    if (!canManage && !isOwner) {
+      throw new ForbiddenException('You can only delete your own tickets');
+    }
+
+    if (ticket.images.length > 0) {
+      const urls = ticket.images.map((img) => img.url);
+      await this.gcsService.deleteFiles(urls);
+    }
+
+    await this.prisma.ticket.delete({ where: { id: ticketId } });
+
+    return { success: true };
+  }
+
   private async sendNotifications(ticket: any, sectionType: string, author: AccessTokenPayload) {
     if (sectionType === 'RESPONSE') {
       await this.notificationsService.create({
@@ -371,5 +448,108 @@ export class TicketsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  async uploadImage(
+    ticketId: string,
+    file: Express.Multer.File,
+    name: string,
+    user: AccessTokenPayload,
+  ) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { projectId: true, createdById: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    const canReadAll = await hasProjectPermission(
+      this.prisma,
+      user.sub,
+      ticket.projectId,
+      PERMISSION_KEYS.TICKET_READ_ALL,
+    );
+    const isOwner = ticket.createdById === user.sub;
+
+    if (!canReadAll && !isOwner) {
+      throw new ForbiddenException('You can only manage images in your own tickets');
+    }
+
+    if (!name || !name.trim()) {
+      throw new BadRequestException('Name is required');
+    }
+
+    const existingImage = await this.prisma.ticketImage.findFirst({
+      where: { ticketId, name: name.trim() },
+    });
+    if (existingImage) {
+      throw new BadRequestException('An image with this name already exists in this ticket');
+    }
+
+    const url = await this.gcsService.uploadFile(file);
+
+    const image = await this.prisma.ticketImage.create({
+      data: {
+        ticketId,
+        name: name.trim(),
+        url,
+        uploadedById: user.sub,
+      },
+    });
+
+    return image;
+  }
+
+  async getImages(ticketId: string, user: AccessTokenPayload) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { projectId: true, createdById: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    const canReadAll = await hasProjectPermission(
+      this.prisma,
+      user.sub,
+      ticket.projectId,
+      PERMISSION_KEYS.TICKET_READ_ALL,
+    );
+    const isOwner = ticket.createdById === user.sub;
+
+    if (!canReadAll && !isOwner) {
+      throw new ForbiddenException('You can only view images in your own tickets');
+    }
+
+    return this.prisma.ticketImage.findMany({
+      where: { ticketId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async deleteImage(ticketId: string, imageId: string, user: AccessTokenPayload) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { projectId: true, createdById: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    const canReadAll = await hasProjectPermission(
+      this.prisma,
+      user.sub,
+      ticket.projectId,
+      PERMISSION_KEYS.TICKET_READ_ALL,
+    );
+    const isOwner = ticket.createdById === user.sub;
+
+    if (!canReadAll && !isOwner) {
+      throw new ForbiddenException('You can only manage images in your own tickets');
+    }
+
+    const image = await this.prisma.ticketImage.findFirst({
+      where: { id: imageId, ticketId },
+    });
+    if (!image) throw new NotFoundException('Image not found');
+
+    await this.prisma.ticketImage.delete({ where: { id: imageId } });
+
+    return { success: true };
   }
 }

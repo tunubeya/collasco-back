@@ -97,6 +97,7 @@ model User {
   createdTickets              Ticket[]          @relation("TicketCreatedBy")
   assignedTickets             Ticket[]          @relation("TicketAssignee")
   ticketSections              TicketSection[]
+  ticketImages               TicketImage[]
 }
 
 model UserRefreshToken {
@@ -622,6 +623,7 @@ model Ticket {
   assignee    User?          @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   createdBy   User           @relation("TicketCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
   sections    TicketSection[]
+  images      TicketImage[]
 
   @@index([projectId])
   @@index([featureId])
@@ -643,6 +645,21 @@ model TicketSection {
 
   @@index([ticketId])
   @@index([authorId])
+}
+
+model TicketImage {
+  id          String   @id @default(uuid())
+  ticketId    String
+  name        String
+  url         String
+  uploadedById String
+  createdAt   DateTime @default(now())
+
+  ticket     Ticket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, name])
+  @@index([ticketId])
 }
 
 model UserProjectPreference {
