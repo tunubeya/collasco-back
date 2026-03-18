@@ -492,6 +492,8 @@ export class TicketsService {
         ticketId,
         name: name.trim(),
         url,
+        mimeType: file.mimetype,
+        size: file.size,
         uploadedById: user.sub,
       },
     });
@@ -549,6 +551,7 @@ export class TicketsService {
     if (!image) throw new NotFoundException('Image not found');
 
     await this.prisma.ticketImage.delete({ where: { id: imageId } });
+    await this.gcsService.deleteFile(image.url);
 
     return { success: true };
   }

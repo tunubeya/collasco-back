@@ -535,6 +535,8 @@ model DocumentationImage {
   labelId     String
   name        String
   url         String
+  mimeType    String
+  size        Int
   createdAt   DateTime                @default(now())
   createdById String?
 
@@ -652,6 +654,8 @@ model TicketImage {
   ticketId    String
   name        String
   url         String
+  mimeType    String
+  size        Int
   uploadedById String
   createdAt   DateTime @default(now())
 
