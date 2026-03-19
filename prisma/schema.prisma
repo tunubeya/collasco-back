@@ -484,6 +484,7 @@ model ProjectLabel {
   id             String              @id @default(uuid())
   projectId      String
   name           String
+  instructions   String?
   isMandatory    Boolean             @default(false)
   defaultNotApplicable Boolean       @default(false)
   displayOrder   Int                 @default(0)

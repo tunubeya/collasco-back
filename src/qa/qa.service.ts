@@ -203,6 +203,7 @@ type LinkedFeaturesResponse = {
 type ProjectLabelView = {
   id: string;
   name: string;
+  instructions: string | null;
   isMandatory: boolean;
   defaultNotApplicable: boolean;
   visibleRoleIds: string[];
@@ -339,6 +340,7 @@ export class QaService {
     projectId: string,
     dto: {
       name: string;
+      instructions?: string;
       isMandatory?: boolean;
       defaultNotApplicable?: boolean;
       visibleRoleIds?: string[];
@@ -358,6 +360,7 @@ export class QaService {
       data: {
         projectId,
         name: dto.name.trim(),
+        instructions: dto.instructions?.trim() ?? null,
         isMandatory: dto.isMandatory ?? false,
         defaultNotApplicable: dto.defaultNotApplicable ?? false,
         displayOrder: nextOrder,
@@ -382,6 +385,7 @@ export class QaService {
     labelId: string,
     dto: {
       name?: string;
+      instructions?: string;
       isMandatory?: boolean;
       defaultNotApplicable?: boolean;
       visibleRoleIds?: string[];
@@ -398,6 +402,7 @@ export class QaService {
     }
     const data: Prisma.ProjectLabelUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name.trim();
+    if (dto.instructions !== undefined) data.instructions = dto.instructions?.trim() ?? null;
     if (dto.isMandatory !== undefined) data.isMandatory = dto.isMandatory;
     if (dto.defaultNotApplicable !== undefined)
       data.defaultNotApplicable = dto.defaultNotApplicable;
@@ -2686,6 +2691,7 @@ export class QaService {
   private mapProjectLabel(label: {
     id: string;
     name: string;
+    instructions?: string | null;
     isMandatory: boolean;
     defaultNotApplicable: boolean;
     visibleRoles?: Array<{ roleId: string }>;
@@ -2697,6 +2703,7 @@ export class QaService {
     return {
       id: label.id,
       name: label.name,
+      instructions: label.instructions ?? null,
       isMandatory: label.isMandatory,
       defaultNotApplicable: label.defaultNotApplicable ?? false,
       visibleRoleIds: (label.visibleRoles ?? []).map((entry) => entry.roleId),
