@@ -102,6 +102,8 @@ type ProjectDocumentationImageResponse = {
     id: string;
     name: string;
     url: string;
+    mimeType: string;
+    size: number;
     entityType: DocumentationEntityType;
     entityId: string;
     createdAt: Date;
@@ -738,6 +740,8 @@ export class QaService {
         id: image.id,
         name: image.name,
         url: image.url,
+        mimeType: image.mimeType,
+        size: image.size,
         entityType: image.entityType,
         entityId: image.entityId,
         createdAt: image.createdAt,
