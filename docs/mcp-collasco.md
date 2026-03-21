@@ -44,8 +44,9 @@ npx jest --config ./test/jest-e2e.json --runInBand test/mcp.e2e-spec.ts
 
 ## Huidige MCP tests
 
-- `logs into Collasco successfully`
-- `finds the Collasco Test Suite project through the project listing flow`
+- `collasco_login`: logs into Collasco successfully
+- `collasco_list_projects`: finds the Collasco Test Suite project through the project listing flow
+- `collasco_search_projects`: finds the Collasco Test Suite project when searching for `Test Suite`
 
 ## Aanbevolen configuratie
 

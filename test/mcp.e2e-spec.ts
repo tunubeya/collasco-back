@@ -51,7 +51,7 @@ const config = resolveTestConfig();
 const maybeIt = config ? it : it.skip;
 
 describe('Collasco MCP (e2e)', () => {
-  maybeIt('logs into Collasco successfully', async () => {
+  maybeIt('tool: collasco_login - logs into Collasco successfully', async () => {
     const client = new CollascoApiClient(config!.apiBaseUrl);
 
     const auth = await client.login(config!.email, config!.password);
@@ -61,7 +61,9 @@ describe('Collasco MCP (e2e)', () => {
     expect(auth.refreshToken).toBeTruthy();
   });
 
-  maybeIt('finds the Collasco Test Suite project through the project listing flow', async () => {
+  maybeIt(
+    'tool: collasco_list_projects - finds the Collasco Test Suite project through the project listing flow',
+    async () => {
     const client = new CollascoApiClient(config!.apiBaseUrl);
 
     await client.login(config!.email, config!.password);
@@ -70,5 +72,20 @@ describe('Collasco MCP (e2e)', () => {
     const names = (result.items ?? []).map((project) => project.name);
 
     expect(names).toContain('Collasco Test Suite');
-  });
+    },
+  );
+
+  maybeIt(
+    'tool: collasco_search_projects - finds the Collasco Test Suite project when searching for Test Suite',
+    async () => {
+    const client = new CollascoApiClient(config!.apiBaseUrl);
+
+    await client.login(config!.email, config!.password);
+
+    const result = (await client.listProjects({ q: 'Test Suite' })) as ProjectListResult;
+    const names = (result.items ?? []).map((project) => project.name);
+
+    expect(names).toContain('Collasco Test Suite');
+    },
+  );
 });
