@@ -1,15 +1,15 @@
 # Collasco MCP PoC
 
-Deze proof of concept voegt een kleine MCP-server toe bovenop de bestaande Collasco API. Daardoor kan een AI-client via tools inloggen en projecten ophalen zonder directe toegang tot de codebase.
+This proof of concept adds a small MCP server on top of the existing Collasco API. This allows an AI client to log in and retrieve projects through tools, without direct access to the codebase.
 
-## Wat deze PoC doet
+## What This PoC Does
 
-- logt in via `POST /v1/auth/login`
-- bewaart access en refresh token in het MCP-proces
-- haalt projecten op via `GET /v1/projects/mine`
-- refresht automatisch wanneer een access token vervalt
+- logs in through `POST /v1/auth/login`
+- stores the access and refresh token inside the MCP process
+- retrieves projects through `GET /v1/projects/mine`
+- refreshes automatically when an access token expires
 
-## Beschikbare tools
+## Available Tools
 
 - `collasco_login`
 - `collasco_list_projects`
@@ -17,7 +17,12 @@ Deze proof of concept voegt een kleine MCP-server toe bovenop de bestaande Colla
 - `collasco_get_project`
 - `collasco_get_project_structure`
 
-## Om te bouwen en starten
+## Tool Intent
+
+- `collasco_get_project`: retrieves the project record, such as name, status, visibility, description, and other project metadata.
+- `collasco_get_project_structure`: retrieves the structural project view, including modules, features, documentation labels, and linked features.
+
+## Build And Start
 
 ```bash
 npm run prisma:generate
@@ -25,32 +30,32 @@ npm run build
 npm run mcp:collasco
 ```
 
-Na een branchwissel met Prisma schema-wijzigingen moet je eerst `npm run prisma:generate` uitvoeren. Anders kan `npm run build` falen door een verouderde Prisma client, ook als de schemafile zelf correct is.
+After switching to a branch with Prisma schema changes, run `npm run prisma:generate` first. Otherwise `npm run build` can fail because of a stale Prisma client, even if the schema file itself is correct.
 
 ## MCP test suite
 
-Er is een live MCP integratietest aanwezig in:
+A live MCP integration test suite is available in:
 
 `test/mcp.e2e-spec.ts`
 
-Deze test gebruikt dezelfde loginflow als de MCP-server en spreekt de live Collasco API aan. Daardoor heb je geldige `COLLASCO_*` credentials nodig en netwerktoegang naar de API.
+These tests use the same login flow as the MCP server and call the live Collasco API. Because of that, you need valid `COLLASCO_*` credentials and network access to the API.
 
-## MCP tests uitvoeren
+## Running The MCP Tests
 
 ```bash
 npm run prisma:generate
 npx jest --config ./test/jest-e2e.json --runInBand test/mcp.e2e-spec.ts
 ```
 
-## Huidige MCP tests
+## Current MCP Tests
 
 - `collasco_login`: logs into Collasco successfully
 - `collasco_list_projects`: finds the Collasco Test Suite project through the project listing flow
 - `collasco_search_projects`: finds the Collasco Test Suite project when searching for `Test Suite`
 
-## Aanbevolen configuratie
+## Recommended Configuration
 
-Gebruik environment variables in de MCP-config van je AI-client:
+Use environment variables in your AI client's MCP configuration:
 
 ```bash
 COLLASCO_API_BASE_URL=https://api.collasco.com/v1
@@ -58,29 +63,29 @@ COLLASCO_EMAIL=you@example.com
 COLLASCO_PASSWORD=your-password
 ```
 
-Dan kan de AI gewoon `collasco_list_projects` oproepen zonder eerst expliciet te loggen.
+Then the AI can call `collasco_list_projects` without needing an explicit login step first.
 
-## Voorbeelden in Codex
+## Examples In Codex
 
 ```text
-Toon mijn Collasco-projecten.
+Show my Collasco projects.
 ```
 
 ```text
-Zoek in mijn Collasco-projecten naar "orderflow".
+Search my Collasco projects for "orderflow".
 ```
 
 ```text
-Haal project 7b54eb89-6607-453f-9f62-fc23f535a476 op.
+Get project 7b54eb89-6607-453f-9f62-fc23f535a476.
 ```
 
 ```text
-Toon de structuur van project 7b54eb89-6607-453f-9f62-fc23f535a476.
+Show the structure of project 7b54eb89-6607-453f-9f62-fc23f535a476.
 ```
 
-## Voorbeeld MCP-config
+## Example MCP Config
 
-Onderstaande vorm werkt als referentie voor clients die stdio-MCP ondersteunen:
+The example below works as a reference for clients that support stdio MCP:
 
 ```json
 {
@@ -98,8 +103,8 @@ Onderstaande vorm werkt als referentie voor clients die stdio-MCP ondersteunen:
 }
 ```
 
-## Opmerkingen
+## Notes
 
-- Deze PoC gebruikt bestaande user login, niet API keys of service accounts.
-- De sessie leeft alleen in het draaiende MCP-proces.
-- Voor breder extern gebruik is een volgende stap: personal access tokens of integratie-specifieke credentials.
+- This PoC uses the existing user login flow, not API keys or service accounts.
+- The session lives only inside the running MCP process.
+- For broader external use, a good next step is personal access tokens or integration-specific credentials.
