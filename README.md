@@ -10,6 +10,17 @@ $npx prisma migrate dev -n init
 $npx prisma migrate deploy ////aplicar migracion
 ```
 
+## After switching branches
+
+If a branch includes Prisma schema changes, regenerate the Prisma client before building or running the app:
+
+```bash
+npm run prisma:generate
+npm run build
+```
+
+Without regenerating, TypeScript can fail with Prisma model/property errors even when the schema itself is correct.
+
 Para ver datos:
 
 ```bash
