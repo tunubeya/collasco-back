@@ -99,6 +99,11 @@ export class CollascoApiClient {
     return this.authenticatedRequest(`/projects/${resolvedProjectId}/structure`);
   }
 
+  async getProjectLabels(projectId?: string): Promise<unknown> {
+    const resolvedProjectId = requiredString(projectId, 'projectId');
+    return this.authenticatedRequest(`/qa/projects/${resolvedProjectId}/labels`);
+  }
+
   private async ensureAuthenticated(): Promise<void> {
     if (this.auth) return;
     await this.login();
@@ -316,6 +321,18 @@ export class CollascoMcpServer {
                   required: ['projectId'],
                 },
               },
+              {
+                name: 'collasco_get_project_labels',
+                description:
+                  'Get the full project label definitions, including instructions and role visibility.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    projectId: { type: 'string', description: 'Project UUID.' },
+                  },
+                  required: ['projectId'],
+                },
+              },
             ],
           });
           return;
@@ -370,6 +387,10 @@ export class CollascoMcpServer {
       case 'collasco_get_project_structure': {
         const structure = await this.apiClient.getProjectStructure(asOptionalString(args?.projectId));
         return toolTextResult(JSON.stringify(structure, null, 2));
+      }
+      case 'collasco_get_project_labels': {
+        const labels = await this.apiClient.getProjectLabels(asOptionalString(args?.projectId));
+        return toolTextResult(JSON.stringify(labels, null, 2));
       }
       default:
         throw new McpError(-32601, `Unknown tool: ${name}`);

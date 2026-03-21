@@ -16,6 +16,12 @@ type ProjectListResult = {
   }>;
 };
 
+type ProjectLabelResult = Array<{
+  id: string;
+  name: string;
+  instructions: string | null;
+}>;
+
 function loadConfigFromCodex(): Partial<McpTestConfig> {
   const configPath = join(homedir(), '.codex', 'config.toml');
   if (!existsSync(configPath)) return {};
@@ -86,6 +92,27 @@ describe('Collasco MCP (e2e)', () => {
     const names = (result.items ?? []).map((project) => project.name);
 
     expect(names).toContain('Collasco Test Suite');
+    },
+  );
+
+  maybeIt(
+    'tool: collasco_get_project_labels - returns the Overview label with instructions containing why and what',
+    async () => {
+      const client = new CollascoApiClient(config!.apiBaseUrl);
+
+      await client.login(config!.email, config!.password);
+
+      const projectList = (await client.listProjects({ q: 'Collasco Test Suite' })) as ProjectListResult;
+      const project = (projectList.items ?? []).find((entry) => entry.name === 'Collasco Test Suite');
+
+      expect(project).toBeDefined();
+
+      const labels = (await client.getProjectLabels(project?.id)) as ProjectLabelResult;
+      const overview = labels.find((label) => label.name === 'Overview');
+
+      expect(overview).toBeDefined();
+      expect(overview?.instructions?.toLowerCase()).toContain('why');
+      expect(overview?.instructions?.toLowerCase()).toContain('what');
     },
   );
 });
