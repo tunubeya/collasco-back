@@ -10,7 +10,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
-import { CreateNotificationDto } from './dto/create-notification.dto';
+import {
+  CreateNotificationDto,
+  CreateUserNotificationDto,
+  CreateProjectNotificationDto,
+  CreateBulkNotificationDto,
+} from './dto/create-notification.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -24,6 +29,24 @@ export class NotificationsController {
   @Post()
   create(@Body() dto: CreateNotificationDto) {
     return this.notificationsService.create(dto);
+  }
+
+  @Post('user')
+  createForUser(@Body() dto: CreateUserNotificationDto) {
+    return this.notificationsService.createForUser(dto);
+  }
+
+  @Post('project/:projectId')
+  createForProject(
+    @Param('projectId') projectId: string,
+    @Body() dto: CreateProjectNotificationDto,
+  ) {
+    return this.notificationsService.createForProject(dto, projectId);
+  }
+
+  @Post('all')
+  createForAllUsers(@Body() dto: CreateBulkNotificationDto) {
+    return this.notificationsService.createForAllUsers(dto);
   }
 
   @Get()
