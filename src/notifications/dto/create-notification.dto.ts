@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsEmail,
   IsEnum,
   IsNotEmpty,
   IsOptional,
@@ -39,9 +40,15 @@ export class CreateNotificationDto {
 }
 
 export class CreateUserNotificationDto {
+  @ValidateIf((o) => !o.email)
   @IsUUID()
   @IsNotEmpty()
-  userId: string;
+  userId?: string;
+
+  @ValidateIf((o) => !o.userId)
+  @IsEmail()
+  @IsNotEmpty()
+  email?: string;
 
   @IsString()
   @IsNotEmpty()

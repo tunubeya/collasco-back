@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -26,9 +26,28 @@ export class NotificationsService {
   }
 
   async createForUser(dto: CreateUserNotificationDto) {
+    let userId = dto.userId;
+
+    if (!userId && dto.email) {
+      const user = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+        select: { id: true },
+      });
+
+      if (!user) {
+        throw new BadRequestException(`User with email ${dto.email} not found`);
+      }
+
+      userId = user.id;
+    }
+
+    if (!userId) {
+      throw new BadRequestException('Either userId or email is required');
+    }
+
     return this.prisma.notification.create({
       data: {
-        userId: dto.userId,
+        userId,
         title: dto.title,
         message: dto.message,
         type: dto.type || 'INFO',
