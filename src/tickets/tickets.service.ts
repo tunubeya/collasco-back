@@ -18,15 +18,12 @@ import {
   requireProjectPermission,
 } from '../projects/permissions';
 import type { AccessTokenPayload } from '../auth/types/jwt-payload';
-import { NotificationsService } from '../notifications/notifications.service';
-import { NotificationType } from '../notifications/dto/create-notification.dto';
 import { GoogleCloudStorageService } from '../google-cloud-storage/google-cloud-storage.service';
 
 @Injectable()
 export class TicketsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly notificationsService: NotificationsService,
     private readonly gcsService: GoogleCloudStorageService,
   ) {}
 
@@ -202,8 +199,6 @@ export class TicketsService {
       data: { updatedAt: new Date() },
     });
 
-    await this.sendNotifications(ticket, section.type, user);
-
     return section;
   }
 
@@ -270,35 +265,6 @@ export class TicketsService {
     await this.prisma.ticket.delete({ where: { id: ticketId } });
 
     return { success: true };
-  }
-
-  private async sendNotifications(ticket: any, sectionType: string, author: AccessTokenPayload) {
-    if (sectionType === 'RESPONSE') {
-      await this.notificationsService.create({
-        userId: ticket.createdById,
-        title: 'Nueva respuesta en tu ticket',
-        message: `Han respondido a "${ticket.title}"`,
-        type: NotificationType.INFO,
-        data: { ticketId: ticket.id, projectId: ticket.projectId },
-      });
-    } else if (sectionType === 'COMMENT') {
-      const members = await this.prisma.projectMember.findMany({
-        where: { projectId: ticket.projectId },
-        include: { user: true },
-      });
-
-      for (const member of members) {
-        if (member.userId !== author.sub) {
-          await this.notificationsService.create({
-            userId: member.userId,
-            title: 'Nuevo comentario en ticket',
-            message: `${author.sub} commented on "${ticket.title}"`,
-            type: NotificationType.INFO,
-            data: { ticketId: ticket.id, projectId: ticket.projectId },
-          });
-        }
-      }
-    }
   }
 
   async findByFeature(featureId: string, user: AccessTokenPayload, pagination: PaginationDto) {
