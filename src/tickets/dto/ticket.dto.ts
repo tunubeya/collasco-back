@@ -1,9 +1,25 @@
-import { IsEnum, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  IsInt,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 export enum TicketStatus {
   OPEN = 'OPEN',
   PENDING = 'PENDING',
   RESOLVED = 'RESOLVED',
+}
+
+export enum TicketScope {
+  MINE = 'mine',
+  ASSIGNED = 'assigned',
+  ALL = 'all',
 }
 
 export class CreateTicketDto {
@@ -69,4 +85,30 @@ export class UpdateTicketSectionDto {
   @IsString()
   @MaxLength(200)
   title?: string;
+}
+
+export class ListTicketsQueryDto {
+  @IsEnum(TicketScope)
+  @IsNotEmpty()
+  scope: TicketScope;
+
+  @IsOptional()
+  @IsUUID()
+  projectId?: string;
+
+  @IsOptional()
+  @IsEnum(TicketStatus)
+  status?: TicketStatus;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number = 20;
 }

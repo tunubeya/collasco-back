@@ -17,6 +17,7 @@ import {
   UpdateTicketDto,
   CreateTicketSectionDto,
   UpdateTicketSectionDto,
+  ListTicketsQueryDto,
 } from './dto/ticket.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
@@ -38,13 +39,9 @@ export class TicketsController {
     return this.ticketsService.create(projectId, dto, user);
   }
 
-  @Get('projects/:projectId/tickets')
-  findAll(
-    @Param('projectId') projectId: string,
-    @Query() pagination: PaginationDto,
-    @CurrentUser() user: AccessTokenPayload,
-  ) {
-    return this.ticketsService.findAll(projectId, pagination, user);
+  @Get('tickets')
+  list(@Query() query: ListTicketsQueryDto, @CurrentUser() user: AccessTokenPayload) {
+    return this.ticketsService.list(query, user);
   }
 
   @Get('projects/:projectId/tickets/autocomplete')
@@ -54,16 +51,6 @@ export class TicketsController {
     @CurrentUser() user: AccessTokenPayload,
   ) {
     return this.ticketsService.searchFeaturesForAutocomplete(projectId, query || '', user);
-  }
-
-  @Get('tickets/mine')
-  findMyTickets(@Query() pagination: PaginationDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.ticketsService.findMyTickets(pagination, user);
-  }
-
-  @Get('tickets/assigned')
-  findAssignedTickets(@Query() pagination: PaginationDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.ticketsService.findAssignedTickets(pagination, user);
   }
 
   @Get('tickets/:id')

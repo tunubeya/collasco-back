@@ -10,6 +10,8 @@ import {
   UpdateTicketDto,
   CreateTicketSectionDto,
   UpdateTicketSectionDto,
+  ListTicketsQueryDto,
+  TicketScope,
 } from './dto/ticket.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import {
@@ -50,50 +52,6 @@ export class TicketsService {
     });
 
     return this.findById(ticket.id, user);
-  }
-
-  async findAll(projectId: string, pagination: PaginationDto, user: AccessTokenPayload) {
-    const { page = 1, limit = 20 } = pagination;
-    const skip = (page - 1) * limit;
-
-    const canReadAll = await hasProjectPermission(
-      this.prisma,
-      user.sub,
-      projectId,
-      PERMISSION_KEYS.TICKET_READ_ALL,
-    );
-
-    const where: any = { projectId };
-    if (!canReadAll) {
-      where.createdById = user.sub;
-    }
-
-    const [items, total] = await Promise.all([
-      this.prisma.ticket.findMany({
-        where,
-        include: {
-          createdBy: { select: { id: true, name: true, email: true } },
-          assignee: { select: { id: true, name: true, email: true } },
-          feature: { select: { id: true, name: true } },
-          _count: { select: { sections: true } },
-        },
-        orderBy: { updatedAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      this.prisma.ticket.count({ where }),
-    ]);
-
-    return {
-      items: items.map((t) => ({
-        ...t,
-        sectionsCount: t._count.sections,
-      })),
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
   }
 
   async findById(id: string, user: AccessTokenPayload) {
@@ -350,13 +308,47 @@ export class TicketsService {
     });
   }
 
-  async findMyTickets(pagination: PaginationDto, user: AccessTokenPayload) {
-    const { page = 1, limit = 20 } = pagination;
+  async list(query: ListTicketsQueryDto, user: AccessTokenPayload) {
+    const { page = 1, limit = 20, scope, projectId, status } = query;
     const skip = (page - 1) * limit;
+
+    const where: any = {};
+
+    if (projectId) {
+      where.projectId = projectId;
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (scope === TicketScope.MINE) {
+      where.createdById = user.sub;
+    } else if (scope === TicketScope.ASSIGNED) {
+      where.assigneeId = user.sub;
+    } else if (scope === TicketScope.ALL) {
+      if (projectId) {
+        const hasPermission = await hasProjectPermission(
+          this.prisma,
+          user.sub,
+          projectId,
+          PERMISSION_KEYS.TICKET_READ_ALL,
+        );
+        if (!hasPermission) {
+          where.createdById = user.sub;
+        }
+      } else {
+        const memberProjects = await this.prisma.projectMember.findMany({
+          where: { userId: user.sub },
+          select: { projectId: true },
+        });
+        where.projectId = { in: memberProjects.map((m) => m.projectId) };
+      }
+    }
 
     const [items, total] = await Promise.all([
       this.prisma.ticket.findMany({
-        where: { createdById: user.sub },
+        where,
         include: {
           project: { select: { id: true, name: true } },
           createdBy: { select: { id: true, name: true, email: true } },
@@ -368,40 +360,7 @@ export class TicketsService {
         skip,
         take: limit,
       }),
-      this.prisma.ticket.count({ where: { createdById: user.sub } }),
-    ]);
-
-    return {
-      items: items.map((t) => ({
-        ...t,
-        sectionsCount: t._count.sections,
-      })),
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-  }
-
-  async findAssignedTickets(pagination: PaginationDto, user: AccessTokenPayload) {
-    const { page = 1, limit = 20 } = pagination;
-    const skip = (page - 1) * limit;
-
-    const [items, total] = await Promise.all([
-      this.prisma.ticket.findMany({
-        where: { assigneeId: user.sub },
-        include: {
-          project: { select: { id: true, name: true } },
-          createdBy: { select: { id: true, name: true, email: true } },
-          assignee: { select: { id: true, name: true, email: true } },
-          feature: { select: { id: true, name: true } },
-          _count: { select: { sections: true } },
-        },
-        orderBy: { updatedAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      this.prisma.ticket.count({ where: { assigneeId: user.sub } }),
+      this.prisma.ticket.count({ where }),
     ]);
 
     return {
