@@ -97,6 +97,7 @@ model User {
   createdTickets              Ticket[]          @relation("TicketCreatedBy")
   assignedTickets             Ticket[]          @relation("TicketAssignee")
   ticketSections              TicketSection[]
+  lockedSections              TicketSection[]   @relation("TicketSectionLockedBy")
   ticketImages               TicketImage[]
 }
 
@@ -642,12 +643,16 @@ model TicketSection {
   authorId    String
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
+  lockedAt    DateTime?
+  lockedById  String?
 
   ticket      Ticket           @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   author      User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  lockedBy    User?            @relation("TicketSectionLockedBy", fields: [lockedById], references: [id], onDelete: SetNull)
 
   @@index([ticketId])
   @@index([authorId])
+  @@index([lockedById])
 }
 
 model TicketImage {

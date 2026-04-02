@@ -65,6 +65,7 @@ export class TicketsService {
         sections: {
           include: {
             author: { select: { id: true, name: true, email: true } },
+            lockedBy: { select: { id: true, name: true, email: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
@@ -87,7 +88,82 @@ export class TicketsService {
       throw new ForbiddenException('You can only view your own tickets');
     }
 
-    return ticket;
+    const lastMessageSection = ticket.sections
+      .filter((s) => s.type === 'RESPONSE' || s.type === 'COMMENT')
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+
+    return {
+      ...ticket,
+      lastMessageId: lastMessageSection?.id || null,
+    };
+  }
+
+  async openTicket(id: string, user: AccessTokenPayload) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id },
+      include: {
+        project: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+        assignee: { select: { id: true, name: true, email: true } },
+        feature: { select: { id: true, name: true } },
+        sections: {
+          include: {
+            author: { select: { id: true, name: true, email: true } },
+            lockedBy: { select: { id: true, name: true, email: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+
+    const canReadAll = await hasProjectPermission(
+      this.prisma,
+      user.sub,
+      ticket.projectId,
+      PERMISSION_KEYS.TICKET_READ_ALL,
+    );
+    const isOwner = ticket.createdById === user.sub;
+
+    if (!canReadAll && !isOwner) {
+      throw new ForbiddenException('You can only view your own tickets');
+    }
+
+    const now = new Date();
+    const sectionsToLock = ticket.sections.filter(
+      (s) => s.authorId !== user.sub && s.lockedAt === null,
+    );
+
+    if (sectionsToLock.length > 0) {
+      await this.prisma.ticketSection.updateMany({
+        where: {
+          id: { in: sectionsToLock.map((s) => s.id) },
+        },
+        data: {
+          lockedAt: now,
+          lockedById: user.sub,
+        },
+      });
+
+      ticket.sections = ticket.sections.map((s) => {
+        if (sectionsToLock.some((sl) => sl.id === s.id)) {
+          return { ...s, lockedAt: now, lockedById: user.sub };
+        }
+        return s;
+      });
+    }
+
+    const lastMessageSection = ticket.sections
+      .filter((s) => s.type === 'RESPONSE' || s.type === 'COMMENT')
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+
+    return {
+      ...ticket,
+      lastMessageId: lastMessageSection?.id || null,
+    };
   }
 
   async update(id: string, dto: UpdateTicketDto, user: AccessTokenPayload) {
@@ -168,9 +244,16 @@ export class TicketsService {
   ) {
     const section = await this.prisma.ticketSection.findFirst({
       where: { id: sectionId, ticketId },
-      include: { ticket: { select: { projectId: true, createdById: true } } },
+      include: {
+        ticket: { select: { projectId: true, createdById: true } },
+        lockedBy: { select: { id: true, name: true, email: true } },
+      },
     });
     if (!section) throw new NotFoundException('Section not found');
+
+    if (section.lockedAt !== null) {
+      throw new ForbiddenException('This section is locked and cannot be edited');
+    }
 
     const isAuthor = section.authorId === user.sub;
     const canManage = await hasProjectPermission(
@@ -192,6 +275,7 @@ export class TicketsService {
       },
       include: {
         author: { select: { id: true, name: true, email: true } },
+        lockedBy: { select: { id: true, name: true, email: true } },
       },
     });
   }

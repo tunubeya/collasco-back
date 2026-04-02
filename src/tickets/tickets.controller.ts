@@ -58,6 +58,11 @@ export class TicketsController {
     return this.ticketsService.findById(id, user);
   }
 
+  @Post('tickets/:id/open')
+  openTicket(@Param('id') id: string, @CurrentUser() user: AccessTokenPayload) {
+    return this.ticketsService.openTicket(id, user);
+  }
+
   @Patch('tickets/:id')
   update(
     @Param('id') id: string,
