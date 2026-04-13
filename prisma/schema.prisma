@@ -100,6 +100,10 @@ model User {
   lockedSections              TicketSection[]   @relation("TicketSectionLockedBy")
   createdShareLinks           TicketShareLink[] @relation("TicketShareLinkCreatedBy")
   ticketImages               TicketImage[]
+  // Tickets donde el usuario recibe notificaciones in-app
+  notifyTickets              TicketNotifyUser[]
+  // Tickets donde el usuario recibe emails
+  emailTickets               TicketEmailUser[]
 }
 
 model UserRefreshToken {
@@ -634,11 +638,39 @@ model Ticket {
   images            TicketImage[]
   shareLink         TicketShareLink? @relation("TicketShareLink", fields: [shareLinkId], references: [id])
   shareLinkId       String?        @unique
+  // Lista de usuarios a notificar in-app
+  notifyUsers       TicketNotifyUser[]
+  // Lista de usuarios a enviar email
+  emailUsers        TicketEmailUser[]
 
   @@index([projectId])
   @@index([featureId])
   @@index([createdById])
   @@index([followUpToken])
+}
+
+model TicketNotifyUser {
+  id        String   @id @default(uuid())
+  ticketId  String
+  userId    String
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, userId])
+}
+
+model TicketEmailUser {
+  id        String   @id @default(uuid())
+  ticketId  String
+  userId    String
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, userId])
 }
 
 model TicketShareLink {

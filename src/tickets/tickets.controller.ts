@@ -12,6 +12,7 @@ import {
   UploadedFile,
 } from '@nestjs/common';
 import { TicketsService } from './tickets.service';
+import { TicketNotificationService } from './ticket-notification.service';
 import {
   CreateTicketDto,
   UpdateTicketDto,
@@ -19,6 +20,10 @@ import {
   UpdateTicketSectionDto,
   ListTicketsQueryDto,
 } from './dto/ticket.dto';
+import {
+  BulkAddTicketsNotifyDto,
+  BulkAddTicketsEmailDto,
+} from './dto/ticket-notification-prefs.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -28,7 +33,10 @@ import { FileInterceptor } from '@nestjs/platform-express';
 @UseGuards(JwtAccessGuard)
 @Controller()
 export class TicketsController {
-  constructor(private readonly ticketsService: TicketsService) {}
+  constructor(
+    private readonly ticketsService: TicketsService,
+    private readonly ticketNotificationService: TicketNotificationService,
+  ) {}
 
   @Post('projects/:projectId/tickets')
   create(
@@ -128,5 +136,41 @@ export class TicketsController {
   @Delete('tickets/:id')
   delete(@Param('id') id: string, @CurrentUser() user: AccessTokenPayload) {
     return this.ticketsService.delete(id, user);
+  }
+
+  // Notificaciones de tickets
+
+  @Post('users/me/ticket-notify-tickets')
+  bulkAddNotifyTickets(
+    @Body() dto: BulkAddTicketsNotifyDto,
+    @CurrentUser() user: AccessTokenPayload,
+  ) {
+    console.log(
+      `[bulkAddNotifyTickets] userId=${user.sub}, ticketIds=${JSON.stringify(dto.ticketIds)}`,
+    );
+    return this.ticketNotificationService.bulkAddTicketsNotify(user.sub, dto.ticketIds);
+  }
+
+  @Delete('users/me/ticket-notify-tickets/:ticketId')
+  removeNotifyTicket(@Param('ticketId') ticketId: string, @CurrentUser() user: AccessTokenPayload) {
+    console.log(`[removeNotifyTicket] userId=${user.sub}, ticketId=${ticketId}`);
+    return this.ticketNotificationService.removeUserFromTicketNotify(user.sub, ticketId);
+  }
+
+  @Post('users/me/ticket-email-tickets')
+  bulkAddEmailTickets(
+    @Body() dto: BulkAddTicketsEmailDto,
+    @CurrentUser() user: AccessTokenPayload,
+  ) {
+    console.log(
+      `[bulkAddEmailTickets] userId=${user.sub}, ticketIds=${JSON.stringify(dto.ticketIds)}`,
+    );
+    return this.ticketNotificationService.bulkAddTicketsEmail(user.sub, dto.ticketIds);
+  }
+
+  @Delete('users/me/ticket-email-tickets/:ticketId')
+  removeEmailTicket(@Param('ticketId') ticketId: string, @CurrentUser() user: AccessTokenPayload) {
+    console.log(`[removeEmailTicket] userId=${user.sub}, ticketId=${ticketId}`);
+    return this.ticketNotificationService.removeUserFromTicketEmail(user.sub, ticketId);
   }
 }

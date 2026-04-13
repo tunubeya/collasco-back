@@ -21,12 +21,16 @@ import {
 } from '../projects/permissions';
 import type { AccessTokenPayload } from '../auth/types/jwt-payload';
 import { GoogleCloudStorageService } from '../google-cloud-storage/google-cloud-storage.service';
+import { EmailService } from '../email/email.service';
+import { TicketNotificationService } from './ticket-notification.service';
 
 @Injectable()
 export class TicketsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly gcsService: GoogleCloudStorageService,
+    private readonly emailService: EmailService,
+    private readonly ticketNotificationService: TicketNotificationService,
   ) {}
 
   async create(projectId: string, dto: CreateTicketDto, user: AccessTokenPayload) {
@@ -69,6 +73,8 @@ export class TicketsService {
           },
           orderBy: { createdAt: 'asc' },
         },
+        notifyUsers: { where: { userId: user.sub } },
+        emailUsers: { where: { userId: user.sub } },
       },
     });
 
@@ -95,6 +101,8 @@ export class TicketsService {
     return {
       ...ticket,
       lastMessageId: lastMessageSection?.id || null,
+      receiveNotifications: ticket.notifyUsers.length > 0,
+      receiveEmails: ticket.emailUsers.length > 0,
     };
   }
 
@@ -233,7 +241,54 @@ export class TicketsService {
       data: { updatedAt: new Date() },
     });
 
+    if (ticket.publicReporterEmail && ticket.followUpToken) {
+      console.log(`[addSection] sending email to public reporter: ${ticket.publicReporterEmail}`);
+      this.emailService
+        .sendTicketNewSectionEmail(ticket.publicReporterEmail, ticket.title, ticket.followUpToken)
+        .then(() => console.log(`[addSection] public email sent to ${ticket.publicReporterEmail}`))
+        .catch((err) => console.error(`[addSection] public email failed:`, err));
+    }
+
+    this.sendInternalNotifications(ticketId, user.sub).catch(console.error);
+
     return section;
+  }
+
+  private async sendInternalNotifications(ticketId: string, authorId: string) {
+
+    const users = await this.ticketNotificationService.getUsersToNotifyForTicket(ticketId);
+    const author = await this.prisma.user.findUnique({
+      where: { id: authorId },
+      select: { name: true },
+    });
+
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { title: true },
+    });
+
+    const notificationsToCreate = users.notifyUsers
+      .filter((u) => u.userId !== authorId)
+      .map((u) => ({
+        userId: u.userId,
+        title: 'New response on ticket',
+        message: `${author?.name || 'Someone'} responded to "${ticket?.title}"`,
+        type: 'INFO' as const,
+        data: { ticketId, type: 'TICKET_SECTION_ADDED' },
+      }));
+
+    if (notificationsToCreate.length > 0) {
+      await this.prisma.notification.createMany({
+        data: notificationsToCreate,
+      });
+     }
+
+    const emailRecipients = users.emailUsers.filter((u) => u.userId !== authorId);
+    
+    for (const recipient of emailRecipients) {
+      this.emailService
+        .sendTicketNewSectionEmail(recipient.email, ticket?.title || '', '');
+    }
   }
 
   async updateSection(

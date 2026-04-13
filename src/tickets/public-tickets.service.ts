@@ -8,6 +8,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { TicketShareLinksService } from './ticket-share-links.service';
 import { GoogleCloudStorageService } from '../google-cloud-storage/google-cloud-storage.service';
+import { EmailService } from '../email/email.service';
+import { TicketNotificationService } from './ticket-notification.service';
 import { randomBytes } from 'crypto';
 import { CreatePublicSectionDto, CreatePublicTicketDto } from './dto/create-public-ticket.dto';
 import { UpdatePublicSectionDto } from './dto/update-public-section.dto';
@@ -22,6 +24,8 @@ export class PublicTicketsService {
     private readonly prisma: PrismaService,
     private readonly shareLinksService: TicketShareLinksService,
     private readonly gcsService: GoogleCloudStorageService,
+    private readonly emailService: EmailService,
+    private readonly ticketNotificationService: TicketNotificationService,
   ) {}
 
   private generateFollowUpToken(): string {
@@ -214,8 +218,42 @@ export class PublicTicketsService {
       where: { id: ticket.id },
       data: { updatedAt: new Date() },
     });
+    // Enviar notificaciones a usuarios internos
+    this.sendInternalNotifications(ticket.id).catch(console.error);
 
     return section;
+  }
+
+  private async sendInternalNotifications(ticketId: string) {
+    const users = await this.ticketNotificationService.getUsersToNotifyForTicket(ticketId);
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { title: true },
+    });
+    const notificationsToCreate = users.notifyUsers.map((u) => ({
+      userId: u.userId,
+      title: 'New response on ticket',
+      message: `Someone responded to "${ticket?.title}"`,
+      type: 'INFO' as const,
+      data: { ticketId, type: 'TICKET_SECTION_ADDED' },
+    }));
+
+    if (notificationsToCreate.length > 0) {
+      await this.prisma.notification.createMany({
+        data: notificationsToCreate,
+      });
+    }
+    const emailRecipients = users.emailUsers;
+    for (const recipient of emailRecipients) {
+      this.emailService
+        .sendTicketNewSectionEmail(recipient.email, ticket?.title || '', '')
+        .catch((err) =>
+          console.error(
+            `[PublicTickets sendInternalNotifications] email failed to=${recipient.email}:`,
+            err,
+          ),
+        );
+    }
   }
 
   async uploadImage(followUpToken: string, file: Express.Multer.File, name: string, ip: string) {
