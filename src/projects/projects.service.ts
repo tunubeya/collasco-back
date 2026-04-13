@@ -164,7 +164,11 @@ export class ProjectsService {
   ): VisibleDocumentationLabel[] {
     return labels
       .filter((label) =>
-        this.canViewDocumentationLabel(role?.id ?? null, label.visibleRoleIds ?? [], role?.isOwner ?? false),
+        this.canViewDocumentationLabel(
+          role?.id ?? null,
+          label.visibleRoleIds ?? [],
+          role?.isOwner ?? false,
+        ),
       )
       .map((label) => ({
         id: label.id,
@@ -761,6 +765,18 @@ export class ProjectsService {
         orderBy,
         include: {
           deletedBy: { select: { id: true, name: true, email: true } },
+          members: {
+            where: { userId: user.sub },
+            include: {
+              role: {
+                include: {
+                  rolePermissions: {
+                    include: { permission: { select: { key: true } } },
+                  },
+                },
+              },
+            },
+          },
         },
       }),
       this.prisma.project.count({ where }),
@@ -812,10 +828,28 @@ export class ProjectsService {
     }));
 
     const trees = this.buildTreesByProject(modules, features);
-    const items = projects.map((project) => ({
-      ...project,
-      modules: trees.get(project.id) ?? [],
-    }));
+    const items = projects.map((project) => {
+      const isOwner = project.ownerId === user.sub;
+      const membership = project.members[0];
+      let hasAccess = false;
+      if (isOwner) {
+        hasAccess = true;
+      } else if (membership?.role) {
+        if (membership.role.isOwner) {
+          hasAccess = true;
+        } else {
+          hasAccess = membership.role.rolePermissions.some(
+            (rp) => rp.permission.key === PERMISSION_KEYS.PROJECT_READ,
+          );
+        }
+      }
+      const { members, ...rest } = project;
+      return {
+        ...rest,
+        hasAccess,
+        modules: trees.get(project.id) ?? [],
+      };
+    });
 
     return { items, total, page, limit: take };
   }
