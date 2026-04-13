@@ -246,7 +246,7 @@ export class PublicTicketsService {
     const emailRecipients = users.emailUsers;
     for (const recipient of emailRecipients) {
       this.emailService
-        .sendTicketNewSectionEmail(recipient.email, ticket?.title || '', '')
+        .sendTicketNewSectionEmail(recipient.email, ticket?.title || '', null, ticketId)
         .catch((err) =>
           console.error(
             `[PublicTickets sendInternalNotifications] email failed to=${recipient.email}:`,

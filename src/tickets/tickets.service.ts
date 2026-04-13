@@ -255,7 +255,6 @@ export class TicketsService {
   }
 
   private async sendInternalNotifications(ticketId: string, authorId: string) {
-
     const users = await this.ticketNotificationService.getUsersToNotifyForTicket(ticketId);
     const author = await this.prisma.user.findUnique({
       where: { id: authorId },
@@ -281,13 +280,17 @@ export class TicketsService {
       await this.prisma.notification.createMany({
         data: notificationsToCreate,
       });
-     }
+    }
 
     const emailRecipients = users.emailUsers.filter((u) => u.userId !== authorId);
-    
+
     for (const recipient of emailRecipients) {
-      this.emailService
-        .sendTicketNewSectionEmail(recipient.email, ticket?.title || '', '');
+      this.emailService.sendTicketNewSectionEmail(
+        recipient.email,
+        ticket?.title || '',
+        null,
+        ticketId,
+      );
     }
   }
 
@@ -483,6 +486,9 @@ export class TicketsService {
         });
         where.projectId = { in: memberProjects.map((m) => m.projectId) };
       }
+    } else if (scope === TicketScope.EXTERNAL) {
+      // Tickets externos (creados por usuarios externos via público)
+      where.NOT = { publicReporterEmail: null };
     }
 
     const [items, total] = await Promise.all([

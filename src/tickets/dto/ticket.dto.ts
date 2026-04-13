@@ -20,6 +20,7 @@ export enum TicketScope {
   MINE = 'mine',
   ASSIGNED = 'assigned',
   ALL = 'all',
+  EXTERNAL = 'external',
 }
 
 export class CreateTicketDto {

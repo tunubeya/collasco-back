@@ -51,19 +51,44 @@ export class EmailService {
     }
   }
 
-  async sendTicketNewSectionEmail(to: string, ticketTitle: string, followUpToken: string) {
+  async sendTicketNewSectionEmail(
+    to: string,
+    ticketTitle: string,
+    followUpToken: string | null,
+    ticketId?: string,
+  ) {
     const baseUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
-    const followUpUrl = followUpToken
-      ? `${baseUrl}/public/tickets/follow/${followUpToken}`
-      : baseUrl;
 
     const subject = `New response on ticket: ${ticketTitle}`;
-    const html = `
-      <h2>New response on your ticket</h2>
-      <p>Ticket: <strong>${ticketTitle}</strong></p>
-      <p>A new response has been added to your ticket.</p>
-      <p><a href="${followUpUrl}">View ticket</a></p>
-    `;
+    let html: string;
+
+    if (followUpToken) {
+      // Usuario externo - enlace público
+      const publicUrl = `${baseUrl}/public/tickets/follow/${followUpToken}`;
+      html = `
+        <h2>New response on your ticket</h2>
+        <p>Ticket: <strong>${ticketTitle}</strong></p>
+        <p>A new response has been added to your ticket.</p>
+        <p><a href="${publicUrl}">View ticket</a></p>
+      `;
+    } else if (ticketId) {
+      // Usuario interno - enlace privado con ID del ticket
+      const internalUrl = `${baseUrl}/app/tickets/${ticketId}`;
+      html = `
+        <h2>New response on ticket: ${ticketTitle}</h2>
+        <p>A new response has been added to a ticket you're following.</p>
+        <p><a href="${internalUrl}">View ticket</a></p>
+      `;
+    } else {
+      // Fallback
+      const internalUrl = `${baseUrl}/app/tickets`;
+      html = `
+        <h2>New response on ticket: ${ticketTitle}</h2>
+        <p>A new response has been added to a ticket you're following.</p>
+        <p><a href="${internalUrl}">View tickets</a></p>
+      `;
+    }
+
     return this.sendEmail(to, subject, html);
   }
 }
