@@ -214,7 +214,7 @@ export class PublicTicketsService {
 
     await this.prisma.ticket.update({
       where: { id: ticket.id },
-      data: { updatedAt: new Date() },
+      data: { updatedAt: new Date(), version: { increment: 1 } },
     });
     // Enviar notificaciones a usuarios internos
     this.sendInternalNotifications(ticket.id).catch(console.error);
@@ -347,10 +347,11 @@ export class PublicTicketsService {
       throw new GoneException('This ticket has been closed');
     }
 
-    const data: { title?: string } = {};
+    const data: { title?: string; version?: { increment: number } } = {};
     if (dto.title !== undefined) {
       data.title = dto.title.trim() || ticket.title;
     }
+    data.version = { increment: 1 };
 
     const updated = await this.prisma.ticket.update({
       where: { id: ticket.id },

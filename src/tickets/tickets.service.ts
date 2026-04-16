@@ -98,6 +98,12 @@ export class TicketsService {
       .filter((s) => s.type === 'RESPONSE' || s.type === 'COMMENT')
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
 
+    await this.prisma.ticketReadReceipt.upsert({
+      where: { userId_ticketId: { userId: user.sub, ticketId: ticket.id } },
+      create: { userId: user.sub, ticketId: ticket.id, lastSeenVersion: ticket.version },
+      update: { lastSeenVersion: ticket.version },
+    });
+
     return {
       ...ticket,
       lastMessageId: lastMessageSection?.id || null,
@@ -192,6 +198,7 @@ export class TicketsService {
         status: dto.status,
         assigneeId: dto.assigneeId,
         featureId: dto.featureId,
+        version: { increment: 1 },
       },
     });
   }
@@ -238,7 +245,7 @@ export class TicketsService {
 
     await this.prisma.ticket.update({
       where: { id: ticketId },
-      data: { updatedAt: new Date() },
+      data: { updatedAt: new Date(), version: { increment: 1 } },
     });
 
     if (ticket.publicReporterEmail && ticket.followUpToken) {
@@ -500,6 +507,10 @@ export class TicketsService {
           assignee: { select: { id: true, name: true, email: true } },
           feature: { select: { id: true, name: true } },
           _count: { select: { sections: true } },
+          readReceipts: {
+            where: { userId: user.sub },
+            select: { lastSeenVersion: true },
+          },
         },
         orderBy: { updatedAt: 'desc' },
         skip,
@@ -512,6 +523,7 @@ export class TicketsService {
       items: items.map((t) => ({
         ...t,
         sectionsCount: t._count.sections,
+        unreadCount: Math.max(0, t.version - (t.readReceipts[0]?.lastSeenVersion ?? 0)),
       })),
       total,
       page,

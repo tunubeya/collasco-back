@@ -104,6 +104,8 @@ model User {
   notifyTickets              TicketNotifyUser[]
   // Tickets donde el usuario recibe emails
   emailTickets               TicketEmailUser[]
+  // Receipts de lectura de tickets
+  ticketReadReceipts         TicketReadReceipt[]
 }
 
 model UserRefreshToken {
@@ -630,6 +632,7 @@ model Ticket {
   followUpToken     String?        @unique
   publicReporterEmail String?
   publicReporterName  String?
+  version           Int            @default(1)
 
   project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   feature           Feature?       @relation(fields: [featureId], references: [id], onDelete: SetNull)
@@ -643,6 +646,8 @@ model Ticket {
   notifyUsers       TicketNotifyUser[]
   // Lista de usuarios a enviar email
   emailUsers        TicketEmailUser[]
+  // Receipts de lectura por usuario
+  readReceipts      TicketReadReceipt[]
 
   @@index([projectId])
   @@index([featureId])
@@ -672,6 +677,21 @@ model TicketEmailUser {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([ticketId, userId])
+}
+
+model TicketReadReceipt {
+  id              String   @id @default(uuid())
+  userId          String
+  ticketId        String
+  lastSeenVersion Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, ticketId])
+  @@index([ticketId])
 }
 
 model TicketShareLink {
