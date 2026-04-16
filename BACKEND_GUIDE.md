@@ -2,6 +2,8 @@
 
 ## Reglas Importantes
 
+- **NUNCA** Hacer cambios de identacion
+
 ### ⚠️ Migraciones de Base de Datos
 
 - **NUNCA** ejecutar `npx prisma migrate dev` sin permiso explícito del usuario

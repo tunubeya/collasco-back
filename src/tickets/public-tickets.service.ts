@@ -67,29 +67,26 @@ export class PublicTicketsService {
       throw new NotFoundException('Invalid or expired link');
     }
 
-    if (!dto.title?.trim()) {
-      throw new BadRequestException('Title is required');
-    }
-    if (!dto.content?.trim()) {
-      throw new BadRequestException('Content is required');
-    }
     if (!dto.email?.trim()) {
       throw new BadRequestException('Email is required');
     }
 
+    const title = dto.title?.trim() || 'New ticket';
+    const content = dto.content?.trim() || '';
     const followUpToken = this.generateFollowUpToken();
 
     const ticket = await this.prisma.ticket.create({
       data: {
         projectId: linkInfo.projectId,
-        title: dto.title.trim(),
+        title,
         followUpToken,
         publicReporterEmail: dto.email.trim().toLowerCase(),
+        publicReporterName: dto.name?.trim() || null,
         sections: {
           create: {
             type: 'DESCRIPTION',
-            title: dto.title.trim(),
-            content: dto.content.trim(),
+            title,
+            content,
           },
         },
       },
@@ -166,6 +163,7 @@ export class PublicTicketsService {
       status: ticket.status,
       createdAt: ticket.createdAt,
       publicReporterEmail: ticket.publicReporterEmail,
+      publicReporterName: ticket.publicReporterName,
       project: ticket.project,
       sections: ticket.sections.map((s) => ({
         id: s.id,
@@ -333,6 +331,36 @@ export class PublicTicketsService {
         updated.author && updated.author.email === ticket.publicReporterEmail
           ? { email: updated.author.email }
           : updated.author,
+    };
+  }
+
+  async updateTicket(followUpToken: string, dto: { title?: string }) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { followUpToken },
+    });
+
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+
+    if (ticket.status === 'RESOLVED') {
+      throw new GoneException('This ticket has been closed');
+    }
+
+    const data: { title?: string } = {};
+    if (dto.title !== undefined) {
+      data.title = dto.title.trim() || ticket.title;
+    }
+
+    const updated = await this.prisma.ticket.update({
+      where: { id: ticket.id },
+      data,
+    });
+
+    return {
+      id: updated.id,
+      title: updated.title,
+      status: updated.status,
     };
   }
 }

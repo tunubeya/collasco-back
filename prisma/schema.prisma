@@ -629,6 +629,7 @@ model Ticket {
   updatedAt         DateTime       @updatedAt
   followUpToken     String?        @unique
   publicReporterEmail String?
+  publicReporterName  String?
 
   project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   feature           Feature?       @relation(fields: [featureId], references: [id], onDelete: SetNull)

@@ -65,4 +65,9 @@ export class PublicTicketsController {
   ) {
     return this.publicTicketsService.updateSection(followUpToken, sectionId, body);
   }
+
+  @Patch('follow/:followUpToken')
+  updateTicket(@Param('followUpToken') followUpToken: string, @Body() body: { title?: string }) {
+    return this.publicTicketsService.updateTicket(followUpToken, body);
+  }
 }
