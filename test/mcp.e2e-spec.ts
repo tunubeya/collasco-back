@@ -22,6 +22,47 @@ type ProjectLabelResult = Array<{
   instructions: string | null;
 }>;
 
+type StructureNode = {
+  type: 'module' | 'feature';
+  id: string;
+  name: string;
+  items?: StructureNode[];
+};
+
+type ProjectStructureResult = {
+  modules?: StructureNode[];
+};
+
+type ModuleOrFeaturePathResult = {
+  id: string;
+  name: string;
+  type: 'module' | 'feature';
+  path: string[];
+  pathText: string;
+};
+
+function findModuleByName(items: StructureNode[] | undefined, name: string): StructureNode | null {
+  for (const item of items ?? []) {
+    if (item.type === 'module' && item.name === name) return item;
+
+    const child = findModuleByName(item.items, name);
+    if (child) return child;
+  }
+
+  return null;
+}
+
+function findFeatureByName(items: StructureNode[] | undefined, name: string): StructureNode | null {
+  for (const item of items ?? []) {
+    if (item.type === 'feature' && item.name === name) return item;
+
+    const child = findFeatureByName(item.items, name);
+    if (child) return child;
+  }
+
+  return null;
+}
+
 function loadConfigFromCodex(): Partial<McpTestConfig> {
   const configPath = join(homedir(), '.codex', 'config.toml');
   if (!existsSync(configPath)) return {};
@@ -113,6 +154,72 @@ describe('Collasco MCP (e2e)', () => {
       expect(overview).toBeDefined();
       expect(overview?.instructions?.toLowerCase()).toContain('why');
       expect(overview?.instructions?.toLowerCase()).toContain('what');
+    },
+  );
+
+  maybeIt(
+    'tool: collasco_get_module_or_feature_path - returns the hierarchical path for Feature 1 in Collasco Test Suite',
+    async () => {
+      const client = new CollascoApiClient(config!.apiBaseUrl);
+
+      await client.login(config!.email, config!.password);
+
+      const projectList = (await client.listProjects({ q: 'Collasco Test Suite' })) as ProjectListResult;
+      const project = (projectList.items ?? []).find((entry) => entry.name === 'Collasco Test Suite');
+
+      expect(project).toBeDefined();
+
+      const structure = (await client.getProjectStructure(project?.id)) as ProjectStructureResult;
+      const feature = findFeatureByName(structure.modules, 'Feature 1');
+
+      expect(feature).toBeDefined();
+
+      const path = (await client.getModuleOrFeaturePath(
+        project?.id,
+        feature?.id,
+        'Collasco Test Suite',
+      )) as ModuleOrFeaturePathResult;
+
+      expect(path).toMatchObject({
+        id: feature?.id,
+        name: 'Feature 1',
+        type: 'feature',
+        path: ['Collasco Test Suite', 'Module structure', 'Submodule 1', 'Feature 1'],
+        pathText: 'Collasco Test Suite -> Module structure -> Submodule 1 -> Feature 1',
+      });
+    },
+  );
+
+  maybeIt(
+    'tool: collasco_get_module_or_feature_path - returns the hierarchical path for Submodule 1 in Collasco Test Suite',
+    async () => {
+      const client = new CollascoApiClient(config!.apiBaseUrl);
+
+      await client.login(config!.email, config!.password);
+
+      const projectList = (await client.listProjects({ q: 'Collasco Test Suite' })) as ProjectListResult;
+      const project = (projectList.items ?? []).find((entry) => entry.name === 'Collasco Test Suite');
+
+      expect(project).toBeDefined();
+
+      const structure = (await client.getProjectStructure(project?.id)) as ProjectStructureResult;
+      const module = findModuleByName(structure.modules, 'Submodule 1');
+
+      expect(module).toBeDefined();
+
+      const path = (await client.getModuleOrFeaturePath(
+        project?.id,
+        module?.id,
+        'Collasco Test Suite',
+      )) as ModuleOrFeaturePathResult;
+
+      expect(path).toMatchObject({
+        id: module?.id,
+        name: 'Submodule 1',
+        type: 'module',
+        path: ['Collasco Test Suite', 'Module structure', 'Submodule 1'],
+        pathText: 'Collasco Test Suite -> Module structure -> Submodule 1',
+      });
     },
   );
 });

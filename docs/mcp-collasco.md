@@ -17,12 +17,14 @@ This proof of concept adds a small MCP server on top of the existing Collasco AP
 - `collasco_get_project`
 - `collasco_get_project_structure`
 - `collasco_get_project_labels`
+- `collasco_get_module_or_feature_path`
 
 ## Tool Intent
 
 - `collasco_get_project`: retrieves the project record, such as name, status, visibility, description, and other project metadata.
 - `collasco_get_project_structure`: retrieves the structural project view, including modules, features, documentation labels, and linked features.
 - `collasco_get_project_labels`: retrieves the full project label definitions, including instructions, visibility roles, read-only roles, and ordering.
+- `collasco_get_module_or_feature_path`: derives a human-readable hierarchical module or feature path from the existing project structure response. This does not require a Collasco API change.
 
 ## Build And Start
 
@@ -55,6 +57,8 @@ npx jest --config ./test/jest-e2e.json --runInBand test/mcp.e2e-spec.ts
 - `collasco_list_projects`: finds the Collasco Test Suite project through the project listing flow
 - `collasco_search_projects`: finds the Collasco Test Suite project when searching for `Test Suite`
 - `collasco_get_project_labels`: returns the `Overview` label and verifies that its instructions contain `why` and `what`
+- `collasco_get_module_or_feature_path`: returns the hierarchical path for `Feature 1` in the `Collasco Test Suite` project
+- `collasco_get_module_or_feature_path`: returns the hierarchical path for `Submodule 1` in the `Collasco Test Suite` project
 
 ## Recommended Configuration
 
@@ -88,6 +92,14 @@ Show the structure of project 7b54eb89-6607-453f-9f62-fc23f535a476.
 
 ```text
 Show the project labels of project 8d1a8d99-987b-4bd0-8a19-ea93fccd95bd.
+```
+
+```text
+Show the path of feature a3585dad-1bd7-4b44-a357-ba287beef18e in project 8d1a8d99-987b-4bd0-8a19-ea93fccd95bd.
+```
+
+```text
+Show the path of module d59b5cf1-bc95-438a-af48-9f38544bdb27 in project 8d1a8d99-987b-4bd0-8a19-ea93fccd95bd.
 ```
 
 ## Example MCP Config
