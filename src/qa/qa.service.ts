@@ -1392,7 +1392,7 @@ export class QaService {
     dto: UpdateTestRunDto,
   ): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
-      where: { id: runId },
+      where: { id: runId, deletedAt: null },
       select: {
         id: true,
         projectId: true,
@@ -1566,7 +1566,7 @@ export class QaService {
     dto: UpsertResultsDto,
   ): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
-      where: { id: runId },
+      where: { id: runId, deletedAt: null },
       select: {
         id: true,
         featureId: true,
@@ -1648,9 +1648,9 @@ export class QaService {
   async getTestRun(userId: string, runId: string): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
       where: { id: runId },
-      select: { projectId: true },
+      select: { projectId: true, deletedAt: true },
     });
-    if (!run) {
+    if (!run || run.deletedAt) {
       throw new NotFoundException('Test run not found.');
     }
 
@@ -1659,12 +1659,32 @@ export class QaService {
     return this.getTestRunDetail(runId);
   }
 
+  async deleteTestRun(userId: string, runId: string): Promise<void> {
+    const run = await this.prisma.testRun.findUnique({
+      where: { id: runId },
+      select: { projectId: true, deletedAt: true },
+    });
+    if (!run) {
+      throw new NotFoundException('Test run not found.');
+    }
+    if (run.deletedAt) {
+      throw new NotFoundException('Test run not found.');
+    }
+
+    await assertProjectWrite(this.prisma, userId, run.projectId);
+
+    await this.prisma.testRun.update({
+      where: { id: runId },
+      data: { deletedAt: new Date() },
+    });
+  }
+
   async listTestRuns(userId: string, featureId: string, limit: number) {
     const projectId = await this.getProjectIdOrThrow(featureId);
     await assertProjectRead(this.prisma, userId, projectId);
 
     const runs = await this.prisma.testRun.findMany({
-      where: { featureId },
+      where: { featureId, deletedAt: null },
       orderBy: { runDate: 'desc' },
       take: limit,
       include: {
@@ -1707,7 +1727,7 @@ export class QaService {
           : { OR: [{ featureId: null }, { feature: { deletedAt: null } }] };
 
     const runs = await this.prisma.testRun.findMany({
-      where: { projectId, ...scopeFilter, ...featureVisibilityFilter },
+      where: { projectId, deletedAt: null, ...scopeFilter, ...featureVisibilityFilter },
       orderBy: { runDate: 'desc' },
       take: limit,
       include: {
@@ -1909,7 +1929,7 @@ export class QaService {
 
     const latestRuns = latestRunIds.length
       ? await this.prisma.testRun.findMany({
-          where: { id: { in: latestRunIds } },
+          where: { id: { in: latestRunIds }, deletedAt: null },
           include: testRunDetailInclude,
         })
       : [];
@@ -2005,6 +2025,7 @@ export class QaService {
     const openRunsRaw = await this.prisma.testRun.findMany({
       where: {
         projectId,
+        deletedAt: null,
         status: TestRunStatus.OPEN,
         OR: [{ featureId: null }, { feature: { deletedAt: null } }],
       },
@@ -2423,7 +2444,7 @@ export class QaService {
 
   private async getTestRunDetail(runId: string): Promise<TestRunDetail> {
     const run = await this.prisma.testRun.findUnique({
-      where: { id: runId },
+      where: { id: runId, deletedAt: null },
       include: testRunDetailInclude,
     });
     if (!run) {

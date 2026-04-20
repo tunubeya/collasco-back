@@ -445,6 +445,7 @@ model TestRun {
   targetCaseIds String[] @default([])
   isTargetScopeCustom Boolean @default(false)
   createdAt DateTime @default(now())
+  deletedAt DateTime?
   status    TestRunStatus @default(OPEN)
 
   project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -454,6 +455,7 @@ model TestRun {
 
   @@index([featureId, runDate])
   @@index([projectId, runDate])
+  @@index([deletedAt])
 }
 
 model TestResult {
