@@ -24,7 +24,7 @@ This proof of concept adds a small MCP server on top of the existing Collasco AP
 - `collasco_get_project`: retrieves the project record, such as name, status, visibility, description, and other project metadata.
 - `collasco_get_project_structure`: retrieves the structural project view, including modules, features, documentation labels, and linked features.
 - `collasco_get_project_labels`: retrieves the full project label definitions, including instructions, visibility roles, read-only roles, and ordering.
-- `collasco_get_module_or_feature_path`: derives a human-readable hierarchical module or feature path from the existing project structure response. This does not require a Collasco API change.
+- `collasco_get_module_or_feature_path`: derives a human-readable hierarchical module or feature path from the existing project structure response. 
 
 ## Build And Start
 
