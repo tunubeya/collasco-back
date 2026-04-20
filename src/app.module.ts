@@ -17,6 +17,7 @@ import { GithubModule } from './github/github.module';
 import { QaModule } from './qa/qa.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { TicketsModule } from './tickets/tickets.module';
+import { EmailModule } from './email/email.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -48,6 +49,7 @@ import { TicketsModule } from './tickets/tickets.module';
     QaModule,
     NotificationsModule,
     TicketsModule,
+    EmailModule,
     // aquí irán tus módulos de dominio (UsersModule, ProjectsModule, etc.)
   ],
   providers: [

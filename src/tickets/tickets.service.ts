@@ -10,6 +10,8 @@ import {
   UpdateTicketDto,
   CreateTicketSectionDto,
   UpdateTicketSectionDto,
+  ListTicketsQueryDto,
+  TicketScope,
 } from './dto/ticket.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import {
@@ -18,16 +20,17 @@ import {
   requireProjectPermission,
 } from '../projects/permissions';
 import type { AccessTokenPayload } from '../auth/types/jwt-payload';
-import { NotificationsService } from '../notifications/notifications.service';
-import { NotificationType } from '../notifications/dto/create-notification.dto';
 import { GoogleCloudStorageService } from '../google-cloud-storage/google-cloud-storage.service';
+import { EmailService } from '../email/email.service';
+import { TicketNotificationService } from './ticket-notification.service';
 
 @Injectable()
 export class TicketsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly notificationsService: NotificationsService,
     private readonly gcsService: GoogleCloudStorageService,
+    private readonly emailService: EmailService,
+    private readonly ticketNotificationService: TicketNotificationService,
   ) {}
 
   async create(projectId: string, dto: CreateTicketDto, user: AccessTokenPayload) {
@@ -55,50 +58,6 @@ export class TicketsService {
     return this.findById(ticket.id, user);
   }
 
-  async findAll(projectId: string, pagination: PaginationDto, user: AccessTokenPayload) {
-    const { page = 1, limit = 20 } = pagination;
-    const skip = (page - 1) * limit;
-
-    const canReadAll = await hasProjectPermission(
-      this.prisma,
-      user.sub,
-      projectId,
-      PERMISSION_KEYS.TICKET_READ_ALL,
-    );
-
-    const where: any = { projectId };
-    if (!canReadAll) {
-      where.createdById = user.sub;
-    }
-
-    const [items, total] = await Promise.all([
-      this.prisma.ticket.findMany({
-        where,
-        include: {
-          createdBy: { select: { id: true, name: true, email: true } },
-          assignee: { select: { id: true, name: true, email: true } },
-          feature: { select: { id: true, name: true } },
-          _count: { select: { sections: true } },
-        },
-        orderBy: { updatedAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      this.prisma.ticket.count({ where }),
-    ]);
-
-    return {
-      items: items.map((t) => ({
-        ...t,
-        sectionsCount: t._count.sections,
-      })),
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-  }
-
   async findById(id: string, user: AccessTokenPayload) {
     const ticket = await this.prisma.ticket.findUnique({
       where: { id },
@@ -110,6 +69,61 @@ export class TicketsService {
         sections: {
           include: {
             author: { select: { id: true, name: true, email: true } },
+            lockedBy: { select: { id: true, name: true, email: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+        notifyUsers: { where: { userId: user.sub } },
+        emailUsers: { where: { userId: user.sub } },
+      },
+    });
+
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+
+    const canReadAll = await hasProjectPermission(
+      this.prisma,
+      user.sub,
+      ticket.projectId,
+      PERMISSION_KEYS.TICKET_READ_ALL,
+    );
+    const isOwner = ticket.createdById === user.sub;
+
+    if (!canReadAll && !isOwner) {
+      throw new ForbiddenException('You can only view your own tickets');
+    }
+
+    const lastMessageSection = ticket.sections
+      .filter((s) => s.type === 'RESPONSE' || s.type === 'COMMENT')
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+
+    await this.prisma.ticketReadReceipt.upsert({
+      where: { userId_ticketId: { userId: user.sub, ticketId: ticket.id } },
+      create: { userId: user.sub, ticketId: ticket.id, lastSeenVersion: ticket.version },
+      update: { lastSeenVersion: ticket.version },
+    });
+
+    return {
+      ...ticket,
+      lastMessageId: lastMessageSection?.id || null,
+      receiveNotifications: ticket.notifyUsers.length > 0,
+      receiveEmails: ticket.emailUsers.length > 0,
+    };
+  }
+
+  async openTicket(id: string, user: AccessTokenPayload) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id },
+      include: {
+        project: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+        assignee: { select: { id: true, name: true, email: true } },
+        feature: { select: { id: true, name: true } },
+        sections: {
+          include: {
+            author: { select: { id: true, name: true, email: true } },
+            lockedBy: { select: { id: true, name: true, email: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
@@ -132,7 +146,38 @@ export class TicketsService {
       throw new ForbiddenException('You can only view your own tickets');
     }
 
-    return ticket;
+    const now = new Date();
+    const sectionsToLock = ticket.sections.filter(
+      (s) => s.authorId !== user.sub && s.lockedAt === null,
+    );
+
+    if (sectionsToLock.length > 0) {
+      await this.prisma.ticketSection.updateMany({
+        where: {
+          id: { in: sectionsToLock.map((s) => s.id) },
+        },
+        data: {
+          lockedAt: now,
+          lockedById: user.sub,
+        },
+      });
+
+      ticket.sections = ticket.sections.map((s) => {
+        if (sectionsToLock.some((sl) => sl.id === s.id)) {
+          return { ...s, lockedAt: now, lockedById: user.sub };
+        }
+        return s;
+      });
+    }
+
+    const lastMessageSection = ticket.sections
+      .filter((s) => s.type === 'RESPONSE' || s.type === 'COMMENT')
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+
+    return {
+      ...ticket,
+      lastMessageId: lastMessageSection?.id || null,
+    };
   }
 
   async update(id: string, dto: UpdateTicketDto, user: AccessTokenPayload) {
@@ -153,6 +198,7 @@ export class TicketsService {
         status: dto.status,
         assigneeId: dto.assigneeId,
         featureId: dto.featureId,
+        version: { increment: 1 },
       },
     });
   }
@@ -199,12 +245,60 @@ export class TicketsService {
 
     await this.prisma.ticket.update({
       where: { id: ticketId },
-      data: { updatedAt: new Date() },
+      data: { updatedAt: new Date(), version: { increment: 1 } },
     });
 
-    await this.sendNotifications(ticket, section.type, user);
+    if (ticket.publicReporterEmail && ticket.followUpToken) {
+      console.log(`[addSection] sending email to public reporter: ${ticket.publicReporterEmail}`);
+      this.emailService
+        .sendTicketNewSectionEmail(ticket.publicReporterEmail, ticket.title, ticket.followUpToken)
+        .then(() => console.log(`[addSection] public email sent to ${ticket.publicReporterEmail}`))
+        .catch((err) => console.error(`[addSection] public email failed:`, err));
+    }
+
+    this.sendInternalNotifications(ticketId, user.sub).catch(console.error);
 
     return section;
+  }
+
+  private async sendInternalNotifications(ticketId: string, authorId: string) {
+    const users = await this.ticketNotificationService.getUsersToNotifyForTicket(ticketId);
+    const author = await this.prisma.user.findUnique({
+      where: { id: authorId },
+      select: { name: true },
+    });
+
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { title: true },
+    });
+
+    const notificationsToCreate = users.notifyUsers
+      .filter((u) => u.userId !== authorId)
+      .map((u) => ({
+        userId: u.userId,
+        title: 'New response on ticket',
+        message: `${author?.name || 'Someone'} responded to "${ticket?.title}"`,
+        type: 'INFO' as const,
+        data: { ticketId, type: 'TICKET_SECTION_ADDED' },
+      }));
+
+    if (notificationsToCreate.length > 0) {
+      await this.prisma.notification.createMany({
+        data: notificationsToCreate,
+      });
+    }
+
+    const emailRecipients = users.emailUsers.filter((u) => u.userId !== authorId);
+
+    for (const recipient of emailRecipients) {
+      this.emailService.sendTicketNewSectionEmail(
+        recipient.email,
+        ticket?.title || '',
+        null,
+        ticketId,
+      );
+    }
   }
 
   async updateSection(
@@ -215,9 +309,16 @@ export class TicketsService {
   ) {
     const section = await this.prisma.ticketSection.findFirst({
       where: { id: sectionId, ticketId },
-      include: { ticket: { select: { projectId: true, createdById: true } } },
+      include: {
+        ticket: { select: { projectId: true, createdById: true } },
+        lockedBy: { select: { id: true, name: true, email: true } },
+      },
     });
     if (!section) throw new NotFoundException('Section not found');
+
+    if (section.lockedAt !== null) {
+      throw new ForbiddenException('This section is locked and cannot be edited');
+    }
 
     const isAuthor = section.authorId === user.sub;
     const canManage = await hasProjectPermission(
@@ -239,6 +340,7 @@ export class TicketsService {
       },
       include: {
         author: { select: { id: true, name: true, email: true } },
+        lockedBy: { select: { id: true, name: true, email: true } },
       },
     });
   }
@@ -270,35 +372,6 @@ export class TicketsService {
     await this.prisma.ticket.delete({ where: { id: ticketId } });
 
     return { success: true };
-  }
-
-  private async sendNotifications(ticket: any, sectionType: string, author: AccessTokenPayload) {
-    if (sectionType === 'RESPONSE') {
-      await this.notificationsService.create({
-        userId: ticket.createdById,
-        title: 'Nueva respuesta en tu ticket',
-        message: `Han respondido a "${ticket.title}"`,
-        type: NotificationType.INFO,
-        data: { ticketId: ticket.id, projectId: ticket.projectId },
-      });
-    } else if (sectionType === 'COMMENT') {
-      const members = await this.prisma.projectMember.findMany({
-        where: { projectId: ticket.projectId },
-        include: { user: true },
-      });
-
-      for (const member of members) {
-        if (member.userId !== author.sub) {
-          await this.notificationsService.create({
-            userId: member.userId,
-            title: 'Nuevo comentario en ticket',
-            message: `${author.sub} commented on "${ticket.title}"`,
-            type: NotificationType.INFO,
-            data: { ticketId: ticket.id, projectId: ticket.projectId },
-          });
-        }
-      }
-    }
   }
 
   async findByFeature(featureId: string, user: AccessTokenPayload, pagination: PaginationDto) {
@@ -384,64 +457,73 @@ export class TicketsService {
     });
   }
 
-  async findMyTickets(pagination: PaginationDto, user: AccessTokenPayload) {
-    const { page = 1, limit = 20 } = pagination;
+  async list(query: ListTicketsQueryDto, user: AccessTokenPayload) {
+    const { page = 1, limit = 20, scope, projectId, status } = query;
     const skip = (page - 1) * limit;
+
+    const where: any = {};
+
+    if (projectId) {
+      where.projectId = projectId;
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (scope === TicketScope.MINE) {
+      where.createdById = user.sub;
+    } else if (scope === TicketScope.ASSIGNED) {
+      where.assigneeId = user.sub;
+    } else if (scope === TicketScope.ALL) {
+      if (projectId) {
+        const hasPermission = await hasProjectPermission(
+          this.prisma,
+          user.sub,
+          projectId,
+          PERMISSION_KEYS.TICKET_READ_ALL,
+        );
+        if (!hasPermission) {
+          where.createdById = user.sub;
+        }
+      } else {
+        const memberProjects = await this.prisma.projectMember.findMany({
+          where: { userId: user.sub },
+          select: { projectId: true },
+        });
+        where.projectId = { in: memberProjects.map((m) => m.projectId) };
+      }
+    } else if (scope === TicketScope.EXTERNAL) {
+      // Tickets externos (creados por usuarios externos via público)
+      where.NOT = { publicReporterEmail: null };
+    }
 
     const [items, total] = await Promise.all([
       this.prisma.ticket.findMany({
-        where: { createdById: user.sub },
+        where,
         include: {
           project: { select: { id: true, name: true } },
           createdBy: { select: { id: true, name: true, email: true } },
           assignee: { select: { id: true, name: true, email: true } },
           feature: { select: { id: true, name: true } },
           _count: { select: { sections: true } },
+          readReceipts: {
+            where: { userId: user.sub },
+            select: { lastSeenVersion: true },
+          },
         },
         orderBy: { updatedAt: 'desc' },
         skip,
         take: limit,
       }),
-      this.prisma.ticket.count({ where: { createdById: user.sub } }),
+      this.prisma.ticket.count({ where }),
     ]);
 
     return {
       items: items.map((t) => ({
         ...t,
         sectionsCount: t._count.sections,
-      })),
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-  }
-
-  async findAssignedTickets(pagination: PaginationDto, user: AccessTokenPayload) {
-    const { page = 1, limit = 20 } = pagination;
-    const skip = (page - 1) * limit;
-
-    const [items, total] = await Promise.all([
-      this.prisma.ticket.findMany({
-        where: { assigneeId: user.sub },
-        include: {
-          project: { select: { id: true, name: true } },
-          createdBy: { select: { id: true, name: true, email: true } },
-          assignee: { select: { id: true, name: true, email: true } },
-          feature: { select: { id: true, name: true } },
-          _count: { select: { sections: true } },
-        },
-        orderBy: { updatedAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      this.prisma.ticket.count({ where: { assigneeId: user.sub } }),
-    ]);
-
-    return {
-      items: items.map((t) => ({
-        ...t,
-        sectionsCount: t._count.sections,
+        unreadCount: Math.max(0, t.version - (t.readReceipts[0]?.lastSeenVersion ?? 0)),
       })),
       total,
       page,

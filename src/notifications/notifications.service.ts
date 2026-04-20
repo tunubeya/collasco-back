@@ -1,7 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateNotificationDto } from './dto/create-notification.dto';
+import {
+  CreateNotificationDto,
+  CreateUserNotificationDto,
+  CreateProjectNotificationDto,
+  CreateBulkNotificationDto,
+} from './dto/create-notification.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 
 @Injectable()
@@ -11,13 +16,100 @@ export class NotificationsService {
   async create(dto: CreateNotificationDto) {
     return this.prisma.notification.create({
       data: {
-        userId: dto.userId,
+        userId: dto.userId!,
         title: dto.title,
         message: dto.message,
         type: dto.type || 'INFO',
         data: dto.data as Prisma.JsonObject | undefined,
       },
     });
+  }
+
+  async createForUser(dto: CreateUserNotificationDto) {
+    let userId = dto.userId;
+
+    if (!userId && dto.email) {
+      const user = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+        select: { id: true },
+      });
+
+      if (!user) {
+        throw new BadRequestException(`User with email ${dto.email} not found`);
+      }
+
+      userId = user.id;
+    }
+
+    if (!userId) {
+      throw new BadRequestException('Either userId or email is required');
+    }
+
+    return this.prisma.notification.create({
+      data: {
+        userId,
+        title: dto.title,
+        message: dto.message,
+        type: dto.type || 'INFO',
+        data: dto.data as Prisma.JsonObject | undefined,
+      },
+    });
+  }
+
+  async createForProject(dto: CreateProjectNotificationDto, projectId: string) {
+    const whereClause: Prisma.ProjectMemberWhereInput = {
+      projectId,
+    };
+
+    if (dto.roleNames && dto.roleNames.length > 0) {
+      whereClause.role = {
+        name: { in: dto.roleNames },
+      };
+    }
+
+    const members = await this.prisma.projectMember.findMany({
+      where: whereClause,
+      select: { userId: true },
+    });
+
+    if (members.length === 0) {
+      return { created: 0, notifications: [] };
+    }
+
+    const notifications = await this.prisma.notification.createMany({
+      data: members.map((member) => ({
+        userId: member.userId,
+        title: dto.title,
+        message: dto.message,
+        type: dto.type || 'INFO',
+        data: dto.data as Prisma.JsonObject | undefined,
+      })),
+    });
+
+    return { created: notifications.count, userIds: members.map((m) => m.userId) };
+  }
+
+  async createForAllUsers(dto: CreateBulkNotificationDto) {
+    const users = await this.prisma.user.findMany({
+      where: { isActive: true },
+      select: { id: true },
+    });
+
+    if (users.length === 0) {
+      return { created: 0, notifications: [] };
+    }
+
+    const notifications = await this.prisma.notification.createMany({
+      data: users.map((user) => ({
+        userId: user.id,
+        title: dto.title,
+        message: dto.message,
+        type: dto.type || 'INFO',
+        data: dto.data as Prisma.JsonObject | undefined,
+      })),
+    });
+
+    return { created: notifications.count, userIds: users.map((u) => u.id) };
   }
 
   async findAll(userId: string, pagination: PaginationDto) {
