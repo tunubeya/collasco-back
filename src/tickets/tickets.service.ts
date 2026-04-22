@@ -55,6 +55,28 @@ export class TicketsService {
       },
     });
 
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId },
+      select: { userId: true, user: { select: { notifyUnassignedTickets: true, emailUnassignedTickets: true } } },
+    });
+
+    const notifyUsersToAdd = members
+      .filter((m) => m.user.notifyUnassignedTickets)
+      .map((m) => ({ ticketId: ticket.id, userId: m.userId }));
+
+    const emailUsersToAdd = members
+      .filter((m) => m.user.emailUnassignedTickets)
+      .map((m) => ({ ticketId: ticket.id, userId: m.userId }));
+
+    if (notifyUsersToAdd.length > 0) {
+      await this.prisma.ticketNotifyUser.createMany({ data: notifyUsersToAdd, skipDuplicates: true });
+      console.log(`[create] added ${notifyUsersToAdd.length} notify users to ticket ${ticket.id}`);
+    }
+    if (emailUsersToAdd.length > 0) {
+      await this.prisma.ticketEmailUser.createMany({ data: emailUsersToAdd, skipDuplicates: true });
+      console.log(`[create] added ${emailUsersToAdd.length} email users to ticket ${ticket.id}`);
+    }
+
     return this.findById(ticket.id, user);
   }
 
@@ -190,6 +212,74 @@ export class TicketsService {
       ticket.projectId,
       PERMISSION_KEYS.TICKET_MANAGE,
     );
+
+    if (dto.assigneeId !== undefined && dto.assigneeId !== ticket.assigneeId) {
+      const oldAssigneeId = ticket.assigneeId;
+      const newAssigneeId = dto.assigneeId;
+      const projectId = ticket.projectId;
+
+      console.log(`[update] ticket=${id} reassign from=${oldAssigneeId} to=${newAssigneeId}`);
+
+      if (oldAssigneeId) {
+        await this.prisma.ticketNotifyUser.deleteMany({
+          where: { ticketId: id, userId: oldAssigneeId },
+        });
+        await this.prisma.ticketEmailUser.deleteMany({
+          where: { ticketId: id, userId: oldAssigneeId },
+        });
+        console.log(`[update] removed old assignee ${oldAssigneeId} from ticket ${id}`);
+
+        const oldPrefs = await this.prisma.user.findUnique({
+          where: { id: oldAssigneeId },
+          select: { notifyUnassignedTickets: true, emailUnassignedTickets: true },
+        });
+        if (oldPrefs?.notifyUnassignedTickets) {
+          const isMember = await this.prisma.projectMember.findFirst({
+            where: { userId: oldAssigneeId, projectId },
+          });
+          if (isMember) {
+            await this.prisma.ticketNotifyUser.createMany({
+              data: [{ ticketId: id, userId: oldAssigneeId }],
+              skipDuplicates: true,
+            });
+            console.log(`[update] re-added old assignee ${oldAssigneeId} to notify (notifyUnassigned=true)`);
+          }
+        }
+        if (oldPrefs?.emailUnassignedTickets) {
+          const isMember = await this.prisma.projectMember.findFirst({
+            where: { userId: oldAssigneeId, projectId },
+          });
+          if (isMember) {
+            await this.prisma.ticketEmailUser.createMany({
+              data: [{ ticketId: id, userId: oldAssigneeId }],
+              skipDuplicates: true,
+            });
+            console.log(`[update] re-added old assignee ${oldAssigneeId} to email (emailUnassigned=true)`);
+          }
+        }
+      }
+
+      if (newAssigneeId) {
+        const newAssigneePrefs = await this.prisma.user.findUnique({
+          where: { id: newAssigneeId },
+          select: { notifyAssignedTickets: true, emailAssignedTickets: true },
+        });
+        if (newAssigneePrefs?.notifyAssignedTickets) {
+          await this.prisma.ticketNotifyUser.createMany({
+            data: [{ ticketId: id, userId: newAssigneeId }],
+            skipDuplicates: true,
+          });
+          console.log(`[update] added new assignee ${newAssigneeId} to notify (notifyAssigned=true)`);
+        }
+        if (newAssigneePrefs?.emailAssignedTickets) {
+          await this.prisma.ticketEmailUser.createMany({
+            data: [{ ticketId: id, userId: newAssigneeId }],
+            skipDuplicates: true,
+          });
+          console.log(`[update] added new assignee ${newAssigneeId} to email (emailAssigned=true)`);
+        }
+      }
+    }
 
     return this.prisma.ticket.update({
       where: { id },
