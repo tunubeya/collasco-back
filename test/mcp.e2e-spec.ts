@@ -34,52 +34,23 @@ type ProjectLabelResult = Array<{
   instructions: string | null;
 }>;
 
-type StructureNode = {
-  type: 'module' | 'feature';
-  id: string;
-  name: string;
-  items?: StructureNode[];
-};
-
-type ProjectStructureResult = {
-  modules?: StructureNode[];
-};
-
-type ModuleOrFeaturePathResult = {
-  id: string;
-  name: string;
-  type: 'module' | 'feature';
-  path: string[];
-  pathText: string;
-};
+type ProjectDocumentationResult = Array<{
+  label: {
+    id: string;
+    name: string;
+  };
+  field: {
+    id: string;
+    content: string | null;
+    isNotApplicable: boolean;
+  } | null;
+}>;
 
 const DEFAULT_MCP_URL = 'http://127.0.0.1:3333/mcp';
 const mcpUrl = process.env.COLLASCO_MCP_URL ?? DEFAULT_MCP_URL;
 const bearerToken = process.env.COLLASCO_MCP_ACCESS_TOKEN ?? process.env.COLLASCO_ACCESS_TOKEN;
 
 let nextId = 1;
-
-function findModuleByName(items: StructureNode[] | undefined, name: string): StructureNode | null {
-  for (const item of items ?? []) {
-    if (item.type === 'module' && item.name === name) return item;
-
-    const child = findModuleByName(item.items, name);
-    if (child) return child;
-  }
-
-  return null;
-}
-
-function findFeatureByName(items: StructureNode[] | undefined, name: string): StructureNode | null {
-  for (const item of items ?? []) {
-    if (item.type === 'feature' && item.name === name) return item;
-
-    const child = findFeatureByName(item.items, name);
-    if (child) return child;
-  }
-
-  return null;
-}
 
 function postJsonRpc<T>(
   method: string,
@@ -211,9 +182,10 @@ describe('Collasco MCP HTTP server (e2e)', () => {
         'collasco_list_projects',
         'collasco_search_projects',
         'collasco_get_project',
-        'collasco_get_project_structure',
         'collasco_get_project_labels',
-        'collasco_get_module_or_feature_path',
+        'collasco_get_project_documentation',
+        'collasco_get_module_documentation',
+        'collasco_get_feature_documentation',
       ]),
     );
   });
@@ -250,7 +222,7 @@ describe('Collasco MCP HTTP server (e2e)', () => {
     expect(overview?.instructions?.toLowerCase()).toContain('what');
   });
 
-  it('tool: collasco_get_module_or_feature_path - returns the hierarchical path for Feature 1 in Collasco Test Suite', async () => {
+  it('tool: collasco_get_project_documentation - returns documentation entries for Collasco Test Suite', async () => {
     const projectList = await callTool<ProjectListResult>('collasco_search_projects', {
       q: 'Collasco Test Suite',
     });
@@ -258,55 +230,24 @@ describe('Collasco MCP HTTP server (e2e)', () => {
 
     expect(project).toBeDefined();
 
-    const structure = await callTool<ProjectStructureResult>('collasco_get_project_structure', {
+    const documentation = await callTool<ProjectDocumentationResult>('collasco_get_project_documentation', {
       projectId: project?.id,
     });
-    const feature = findFeatureByName(structure.modules, 'Feature 1');
 
-    expect(feature).toBeDefined();
-
-    const path = await callTool<ModuleOrFeaturePathResult>('collasco_get_module_or_feature_path', {
-      projectId: project?.id,
-      moduleOrFeatureId: feature?.id,
-      projectName: 'Collasco Test Suite',
-    });
-
-    expect(path).toMatchObject({
-      id: feature?.id,
-      name: 'Feature 1',
-      type: 'feature',
-      path: ['Collasco Test Suite', 'Module structure', 'Submodule 1', 'Feature 1'],
-      pathText: 'Collasco Test Suite -> Module structure -> Submodule 1 -> Feature 1',
-    });
+    expect(Array.isArray(documentation)).toBe(true);
+    expect(documentation.length).toBeGreaterThan(0);
+    expect(documentation[0]?.label?.id).toBeDefined();
+    expect(documentation[0]?.label?.name).toBeDefined();
   });
 
-  it('tool: collasco_get_module_or_feature_path - returns the hierarchical path for Submodule 1 in Collasco Test Suite', async () => {
-    const projectList = await callTool<ProjectListResult>('collasco_search_projects', {
-      q: 'Collasco Test Suite',
-    });
-    const project = (projectList.items ?? []).find((entry) => entry.name === 'Collasco Test Suite');
-
-    expect(project).toBeDefined();
-
-    const structure = await callTool<ProjectStructureResult>('collasco_get_project_structure', {
-      projectId: project?.id,
-    });
-    const module = findModuleByName(structure.modules, 'Submodule 1');
-
-    expect(module).toBeDefined();
-
-    const path = await callTool<ModuleOrFeaturePathResult>('collasco_get_module_or_feature_path', {
-      projectId: project?.id,
-      moduleOrFeatureId: module?.id,
-      projectName: 'Collasco Test Suite',
+  it('tool: collasco_get_feature_documentation - returns documentation entries for the Manual feature', async () => {
+    const documentation = await callTool<ProjectDocumentationResult>('collasco_get_feature_documentation', {
+      featureId: '0a229c8d-1db5-4a1d-8730-961bdbca9193',
     });
 
-    expect(path).toMatchObject({
-      id: module?.id,
-      name: 'Submodule 1',
-      type: 'module',
-      path: ['Collasco Test Suite', 'Module structure', 'Submodule 1'],
-      pathText: 'Collasco Test Suite -> Module structure -> Submodule 1',
-    });
+    expect(Array.isArray(documentation)).toBe(true);
+    expect(documentation.length).toBeGreaterThan(0);
+    expect(documentation[0]?.label?.id).toBeDefined();
+    expect(documentation[0]?.label?.name).toBeDefined();
   });
 });

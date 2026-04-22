@@ -48,26 +48,6 @@ type CollascoApiClientOptions = {
   allowPasswordLogin?: boolean;
 };
 
-type ProjectStructure = {
-  projectId: string;
-  modules?: StructureNode[];
-};
-
-type StructureNode = {
-  type: 'module' | 'feature';
-  id: string;
-  name: string;
-  items?: StructureNode[];
-};
-
-type ModuleOrFeaturePathResult = {
-  id: string;
-  name: string;
-  type: 'module' | 'feature';
-  path: string[];
-  pathText: string;
-};
-
 const JSON_RPC_VERSION = '2.0';
 const DEFAULT_API_BASE_URL = 'https://api.collasco.com/v1';
 const MCP_PROTOCOL_VERSION = '2024-11-05';
@@ -145,28 +125,24 @@ export class CollascoApiClient {
     return this.authenticatedRequest(`/projects/${resolvedProjectId}`, accessToken);
   }
 
-  async getProjectStructure(projectId?: string, accessToken?: string): Promise<unknown> {
-    const resolvedProjectId = requiredString(projectId, 'projectId');
-    return this.authenticatedRequest(`/projects/${resolvedProjectId}/structure`, accessToken);
-  }
-
   async getProjectLabels(projectId?: string, accessToken?: string): Promise<unknown> {
     const resolvedProjectId = requiredString(projectId, 'projectId');
     return this.authenticatedRequest(`/qa/projects/${resolvedProjectId}/labels`, accessToken);
   }
 
-  async getModuleOrFeaturePath(
-    projectId?: string,
-    moduleOrFeatureId?: string,
-    projectName?: string,
-    accessToken?: string,
-  ): Promise<ModuleOrFeaturePathResult> {
+  async getProjectDocumentation(projectId?: string, accessToken?: string): Promise<unknown> {
     const resolvedProjectId = requiredString(projectId, 'projectId');
-    const resolvedModuleOrFeatureId = requiredString(moduleOrFeatureId, 'moduleOrFeatureId');
-    const structure = (await this.getProjectStructure(resolvedProjectId, accessToken)) as ProjectStructure;
-    const rootName =
-      asOptionalString(projectName) ?? (await this.resolveProjectName(structure.projectId, accessToken));
-    return findModuleOrFeaturePath(structure.modules ?? [], resolvedModuleOrFeatureId, [rootName]);
+    return this.authenticatedRequest(`/qa/projects/${resolvedProjectId}/documentation`, accessToken);
+  }
+
+  async getModuleDocumentation(moduleId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedModuleId = requiredString(moduleId, 'moduleId');
+    return this.authenticatedRequest(`/qa/modules/${resolvedModuleId}/documentation`, accessToken);
+  }
+
+  async getFeatureDocumentation(featureId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedFeatureId = requiredString(featureId, 'featureId');
+    return this.authenticatedRequest(`/qa/features/${resolvedFeatureId}/documentation`, accessToken);
   }
 
   private async ensureAuthenticated(): Promise<void> {
@@ -206,15 +182,6 @@ export class CollascoApiClient {
 
     this.refreshedTokens = tokenSet;
     return tokenSet;
-  }
-
-  private async resolveProjectName(projectId: string, accessToken?: string): Promise<string> {
-    const project = await this.getProject(projectId, accessToken);
-    if (isRecord(project)) {
-      return asOptionalString(project.name) ?? projectId;
-    }
-
-    return projectId;
   }
 
   private async authenticatedRequest(path: string, accessToken?: string): Promise<unknown> {
@@ -426,25 +393,30 @@ export class CollascoMcpServer {
         const project = await this.apiClient.getProject(asOptionalString(args?.projectId), context.accessToken);
         return toolTextResult(JSON.stringify(project, null, 2));
       }
-      case 'collasco_get_project_structure': {
-        const structure = await this.apiClient.getProjectStructure(
-          asOptionalString(args?.projectId),
-          context.accessToken,
-        );
-        return toolTextResult(JSON.stringify(structure, null, 2));
-      }
       case 'collasco_get_project_labels': {
         const labels = await this.apiClient.getProjectLabels(asOptionalString(args?.projectId), context.accessToken);
         return toolTextResult(JSON.stringify(labels, null, 2));
       }
-      case 'collasco_get_module_or_feature_path': {
-        const path = await this.apiClient.getModuleOrFeaturePath(
+      case 'collasco_get_project_documentation': {
+        const documentation = await this.apiClient.getProjectDocumentation(
           asOptionalString(args?.projectId),
-          asOptionalString(args?.moduleOrFeatureId),
-          asOptionalString(args?.projectName),
           context.accessToken,
         );
-        return toolTextResult(JSON.stringify(path, null, 2));
+        return toolTextResult(JSON.stringify(documentation, null, 2));
+      }
+      case 'collasco_get_module_documentation': {
+        const documentation = await this.apiClient.getModuleDocumentation(
+          asOptionalString(args?.moduleId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(documentation, null, 2));
+      }
+      case 'collasco_get_feature_documentation': {
+        const documentation = await this.apiClient.getFeatureDocumentation(
+          asOptionalString(args?.featureId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(documentation, null, 2));
       }
       default:
         throw new McpError(-32601, `Unknown tool: ${name}`);
@@ -657,17 +629,6 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       },
     },
     {
-      name: 'collasco_get_project_structure',
-      description: 'Get the full module and feature structure for a project.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          projectId: { type: 'string', description: 'Project UUID.' },
-        },
-        required: ['projectId'],
-      },
-    },
-    {
       name: 'collasco_get_project_labels',
       description: 'Get the full project label definitions, including instructions and role visibility.',
       inputSchema: {
@@ -679,20 +640,36 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       },
     },
     {
-      name: 'collasco_get_module_or_feature_path',
-      description:
-        'Get the hierarchical path for a module or feature inside a project, derived from the project structure.',
+      name: 'collasco_get_project_documentation',
+      description: 'Get the project-level documentation entries for a project.',
       inputSchema: {
         type: 'object',
         properties: {
           projectId: { type: 'string', description: 'Project UUID.' },
-          moduleOrFeatureId: { type: 'string', description: 'Module or feature UUID.' },
-          projectName: {
-            type: 'string',
-            description: 'Optional project name to use as the root path label.',
-          },
         },
-        required: ['projectId', 'moduleOrFeatureId'],
+        required: ['projectId'],
+      },
+    },
+    {
+      name: 'collasco_get_module_documentation',
+      description: 'Get the module-level documentation entries for a module.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string', description: 'Module UUID.' },
+        },
+        required: ['moduleId'],
+      },
+    },
+    {
+      name: 'collasco_get_feature_documentation',
+      description: 'Get the feature-level documentation entries for a feature.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          featureId: { type: 'string', description: 'Feature UUID.' },
+        },
+        required: ['featureId'],
       },
     },
   ];
@@ -745,43 +722,6 @@ function toolTextResult(text: string) {
       },
     ],
   };
-}
-
-function findModuleOrFeaturePath(
-  items: StructureNode[],
-  moduleOrFeatureId: string,
-  parentPath: string[],
-): ModuleOrFeaturePathResult {
-  const result = findModuleOrFeaturePathOrNull(items, moduleOrFeatureId, parentPath);
-  if (!result) {
-    throw new McpError(404, `Module or feature not found in project structure: ${moduleOrFeatureId}`);
-  }
-
-  return result;
-}
-
-function findModuleOrFeaturePathOrNull(
-  items: StructureNode[],
-  moduleOrFeatureId: string,
-  parentPath: string[],
-): ModuleOrFeaturePathResult | null {
-  for (const item of items) {
-    const path = [...parentPath, item.name];
-    if (item.id === moduleOrFeatureId) {
-      return {
-        id: item.id,
-        name: item.name,
-        type: item.type,
-        path,
-        pathText: path.join(' -> '),
-      };
-    }
-
-    const childResult = findModuleOrFeaturePathOrNull(item.items ?? [], moduleOrFeatureId, path);
-    if (childResult) return childResult;
-  }
-
-  return null;
 }
 
 function parseContentLength(headerText: string): number {
@@ -860,8 +800,10 @@ function protectedResourceMetadata(resourceUrl: string): Record<string, unknown>
     bearer_methods_supported: ['header'],
     scopes_supported: [
       'collasco:projects:read',
-      'collasco:project-structure:read',
       'collasco:project-labels:read',
+      'collasco:project-documentation:read',
+      'collasco:module-documentation:read',
+      'collasco:feature-documentation:read',
     ],
   };
 }
