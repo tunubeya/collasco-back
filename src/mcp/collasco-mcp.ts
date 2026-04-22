@@ -537,6 +537,24 @@ export class CollascoHttpMcpServer {
       return;
     }
 
+    if (req.method === 'GET' && requestUrl.pathname === '/mcp' && acceptsEventStream(req.headers.accept)) {
+      sendJson(
+        res,
+        405,
+        {
+          error: 'Method not allowed',
+          message: 'This MCP endpoint accepts JSON-RPC requests with POST /mcp.',
+        },
+        corsHeaders(),
+      );
+      return;
+    }
+
+    if (req.method === 'GET' && (requestUrl.pathname === '/' || requestUrl.pathname === '/mcp')) {
+      sendJson(res, 200, mcpDiscovery(this.publicMcpUrl()), corsHeaders());
+      return;
+    }
+
     if (req.method !== 'POST' || requestUrl.pathname !== '/mcp') {
       sendJson(res, 404, { error: 'Not found' }, corsHeaders());
       return;
@@ -780,6 +798,11 @@ function parseBearerToken(authorization: string | string[] | undefined): string 
   return match?.[1]?.trim() || null;
 }
 
+function acceptsEventStream(accept: string | string[] | undefined): boolean {
+  const values = Array.isArray(accept) ? accept : [accept];
+  return values.some((value) => value?.toLowerCase().includes('text/event-stream'));
+}
+
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
 
@@ -840,6 +863,29 @@ function protectedResourceMetadata(resourceUrl: string): Record<string, unknown>
       'collasco:project-structure:read',
       'collasco:project-labels:read',
     ],
+  };
+}
+
+function mcpDiscovery(resourceUrl: string): Record<string, unknown> {
+  return {
+    name: 'collasco-mcp',
+    transport: 'streamable-http',
+    endpoint: resourceUrl,
+    methods: {
+      initialize: {
+        method: 'POST',
+        path: new URL(resourceUrl).pathname,
+        contentType: 'application/json',
+      },
+      health: {
+        method: 'GET',
+        path: '/health',
+      },
+      oauthProtectedResource: {
+        method: 'GET',
+        path: '/.well-known/oauth-protected-resource',
+      },
+    },
   };
 }
 

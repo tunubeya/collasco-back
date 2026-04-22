@@ -51,6 +51,8 @@ The HTTP server listens on:
 http://localhost:3333/mcp
 ```
 
+Opening `http://localhost:3333/` or `http://localhost:3333/mcp` with a browser or `curl` returns a small discovery response. MCP clients should still connect to `/mcp` and send JSON-RPC requests with `POST`.
+
 Register it with Codex as streamable HTTP MCP:
 
 ```bash
