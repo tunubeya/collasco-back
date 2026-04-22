@@ -136,18 +136,20 @@ A live MCP integration test suite is available in:
 
 `test/mcp.e2e-spec.ts`
 
-These tests use the API login flow and call the live Collasco API. Because of that, you need valid `COLLASCO_*` credentials and network access to the API.
+These tests call the running HTTP MCP server through JSON-RPC. Start the MCP server first, then run the tests. The tests default to `http://127.0.0.1:3333/mcp`; override this with `COLLASCO_MCP_URL` when the server listens somewhere else. If the running server requires bearer authentication, set `COLLASCO_MCP_ACCESS_TOKEN` or `COLLASCO_ACCESS_TOKEN`.
 
 ## Running The MCP Tests
 
 ```bash
 npm run prisma:generate
-npx jest --config ./test/jest-e2e.json --runInBand test/mcp.e2e-spec.ts
+npm run mcp:collasco:http:login
+npm run test:mcp:e2e
 ```
 
 ## Current MCP Tests
 
-- API login: logs into Collasco successfully
+- MCP initialize: verifies the running MCP server identity
+- `tools/list`: verifies the expected Collasco MCP tools are exposed
 - `collasco_list_projects`: finds the Collasco Test Suite project through the project listing flow
 - `collasco_search_projects`: finds the Collasco Test Suite project when searching for `Test Suite`
 - `collasco_get_project_labels`: returns the `Overview` label and verifies that its instructions contain `why` and `what`
