@@ -2,16 +2,25 @@
 
 This proof of concept adds a small MCP server on top of the existing Collasco API. This allows an AI client to log in and retrieve projects through tools, without direct access to the codebase.
 
+The preferred transport is now HTTP with OAuth-style bearer access tokens:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+For local development the MCP server can run on localhost. Later the same HTTP transport can be hosted remotely.
+
 ## What This PoC Does
 
-- logs in through `POST /v1/auth/login`
-- stores the access and refresh token inside the MCP process
+- exposes a local HTTP MCP endpoint at `/mcp`
+- supports `Authorization: Bearer <access_token>` for HTTP MCP requests
+- supports a local-only refresh-token bridge when started with `npm run mcp:collasco:http:login`
+- forwards the bearer access token to the Collasco API
 - retrieves projects through `GET /v1/projects/mine`
-- refreshes automatically when an access token expires
+- exposes OAuth protected-resource metadata for future hosted use
 
 ## Available Tools
 
-- `collasco_login`
 - `collasco_list_projects`
 - `collasco_search_projects`
 - `collasco_get_project`
@@ -31,10 +40,93 @@ This proof of concept adds a small MCP server on top of the existing Collasco AP
 ```bash
 npm run prisma:generate
 npm run build
-npm run mcp:collasco
+npm run mcp:collasco:http:login
 ```
 
 After switching to a branch with Prisma schema changes, run `npm run prisma:generate` first. Otherwise `npm run build` can fail because of a stale Prisma client, even if the schema file itself is correct.
+
+The HTTP server listens on:
+
+```text
+http://localhost:3333/mcp
+```
+
+Register it with Codex as streamable HTTP MCP:
+
+```bash
+codex mcp add collasco --url http://127.0.0.1:3333/mcp --bearer-token-env-var COLLASCO_ACCESS_TOKEN
+```
+
+This stores only the environment variable name, not the token value. With the login startup script below, the MCP server can also authenticate requests through its local refresh-token bridge, so Codex does not need to store a token in its config.
+
+For local development, the easiest startup path is:
+
+```bash
+npm run mcp:collasco:http:login
+```
+
+The script prompts for your Collasco email and password, calls `POST /auth/login`, keeps the returned access and refresh tokens in the MCP server process environment, and starts the HTTP MCP server. It does not write tokens to disk.
+
+You can also provide credentials through the process environment when you need a non-interactive startup:
+
+```bash
+COLLASCO_EMAIL=you@example.com COLLASCO_PASSWORD=... npm run mcp:collasco:http:login
+```
+
+You can change the port with:
+
+```bash
+COLLASCO_MCP_HTTP_PORT=3334 npm run mcp:collasco:http
+```
+
+## Authentication
+
+Hosted HTTP MCP requests must include a Collasco access token on every request:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+The MCP server forwards that token to the Collasco API. It does not read `COLLASCO_EMAIL` or `COLLASCO_PASSWORD` by default in normal server mode. The `mcp:collasco:http:login` startup script is the local convenience path that prompts for credentials, retrieves tokens, and starts the server with those tokens in memory.
+
+You can also provide a refresh token to the local MCP server:
+
+```bash
+COLLASCO_ACCESS_TOKEN=<access_token>
+COLLASCO_REFRESH_TOKEN=<refresh_token>
+npm run mcp:collasco:http
+```
+
+When the Collasco API rejects the access token with `401`, the MCP server calls `POST /auth/refresh` with `Authorization: Bearer <refresh_token>`, caches the rotated tokens in memory, and retries the original API request.
+
+For local development only, you can let the MCP server obtain the access token from the refresh token without requiring the MCP client to send an `Authorization` header:
+
+```bash
+COLLASCO_REFRESH_TOKEN=<refresh_token>
+COLLASCO_MCP_ALLOW_REFRESH_TOKEN_AUTH=true
+npm run mcp:collasco:http
+```
+
+Do not use `COLLASCO_MCP_ALLOW_REFRESH_TOKEN_AUTH=true` for hosted deployments. Hosted MCP should require the client to send `Authorization: Bearer <access_token>` and should let the OAuth client handle refresh-token rotation.
+
+The HTTP server exposes OAuth protected-resource metadata at:
+
+```text
+http://localhost:3333/.well-known/oauth-protected-resource
+```
+
+The Collasco API exposes authorization-server metadata at:
+
+```text
+https://api.collasco.com/v1/.well-known/oauth-authorization-server
+```
+
+Set these variables when hosting:
+
+```bash
+COLLASCO_MCP_PUBLIC_BASE_URL=https://mcp.collasco.com
+COLLASCO_AUTHORIZATION_SERVER_URL=https://api.collasco.com
+```
 
 ## MCP test suite
 
@@ -42,7 +134,7 @@ A live MCP integration test suite is available in:
 
 `test/mcp.e2e-spec.ts`
 
-These tests use the same login flow as the MCP server and call the live Collasco API. Because of that, you need valid `COLLASCO_*` credentials and network access to the API.
+These tests use the API login flow and call the live Collasco API. Because of that, you need valid `COLLASCO_*` credentials and network access to the API.
 
 ## Running The MCP Tests
 
@@ -53,26 +145,16 @@ npx jest --config ./test/jest-e2e.json --runInBand test/mcp.e2e-spec.ts
 
 ## Current MCP Tests
 
-- `collasco_login`: logs into Collasco successfully
+- API login: logs into Collasco successfully
 - `collasco_list_projects`: finds the Collasco Test Suite project through the project listing flow
 - `collasco_search_projects`: finds the Collasco Test Suite project when searching for `Test Suite`
 - `collasco_get_project_labels`: returns the `Overview` label and verifies that its instructions contain `why` and `what`
 - `collasco_get_module_or_feature_path`: returns the hierarchical path for `Feature 1` in the `Collasco Test Suite` project
 - `collasco_get_module_or_feature_path`: returns the hierarchical path for `Submodule 1` in the `Collasco Test Suite` project
 
-## Recommended Configuration
+## Examples In MCP Clients
 
-Use environment variables in your AI client's MCP configuration:
-
-```bash
-COLLASCO_API_BASE_URL=https://api.collasco.com/v1
-COLLASCO_EMAIL=you@example.com
-COLLASCO_PASSWORD=your-password
-```
-
-Then the AI can call `collasco_list_projects` without needing an explicit login step first.
-
-## Examples In Codex
+These prompts work in MCP clients that surface the Collasco tools natively. In Codex sessions where HTTP MCP tools are not surfaced directly, use the HTTP JSON-RPC endpoint instead.
 
 ```text
 Show my Collasco projects.
@@ -102,28 +184,8 @@ Show the path of feature a3585dad-1bd7-4b44-a357-ba287beef18e in project 8d1a8d9
 Show the path of module d59b5cf1-bc95-438a-af48-9f38544bdb27 in project 8d1a8d99-987b-4bd0-8a19-ea93fccd95bd.
 ```
 
-## Example MCP Config
-
-The example below works as a reference for clients that support stdio MCP:
-
-```json
-{
-  "mcpServers": {
-    "collasco": {
-      "command": "node",
-      "args": ["/absolute/path/to/Collasco Back-End/dist/mcp/collasco-mcp.js"],
-      "env": {
-        "COLLASCO_API_BASE_URL": "https://api.collasco.com/v1",
-        "COLLASCO_EMAIL": "you@example.com",
-        "COLLASCO_PASSWORD": "your-password"
-      }
-    }
-  }
-}
-```
-
 ## Notes
 
-- This PoC uses the existing user login flow, not API keys or service accounts.
-- The session lives only inside the running MCP process.
-- For broader external use, a good next step is personal access tokens or integration-specific credentials.
+- HTTP mode treats the MCP server as an OAuth protected resource.
+- Access tokens are supplied by the MCP client and must be sent in the `Authorization` header.
+- Before public hosting, issue access tokens specifically for the MCP resource/audience and validate scopes.

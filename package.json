@@ -8,6 +8,8 @@
   "scripts": {
     "build": "nest build",
     "mcp:collasco": "node dist/mcp/collasco-mcp.js",
+    "mcp:collasco:http": "node dist/mcp/collasco-mcp.js --http",
+    "mcp:collasco:http:login": "node scripts/start-collasco-mcp-http.js",
     "start": "node dist/main.js",
     "start:prod": "prisma migrate deploy && node dist/main.js",
     "start:dev": "nest start --watch",
