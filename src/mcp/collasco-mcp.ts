@@ -147,7 +147,10 @@ export class CollascoApiClient {
 
   async getProjectStructure(projectId?: string, accessToken?: string): Promise<unknown> {
     const resolvedProjectId = requiredString(projectId, 'projectId');
-    return this.authenticatedRequest(`/projects/${resolvedProjectId}/structure`, accessToken);
+    return this.authenticatedRequest(
+      `/projects/${resolvedProjectId}/structure?includeAllDocumentationLabels=true`,
+      accessToken,
+    );
   }
 
   async getProjectLabels(projectId?: string, accessToken?: string): Promise<unknown> {

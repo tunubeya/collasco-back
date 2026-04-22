@@ -138,6 +138,7 @@ Notas:
 - Ya no se exponen `description` en los nodos. Toda la información proviene de `documentationLabels`, restringida según el rol del usuario.
 - Cada entrada de `documentationLabels` incluye `isMandatory` y se ordena usando la prioridad (`displayOrder`) definida en los labels del proyecto.
 - Si el usuario guardó preferencias (`selectedLabelIds`), el árbol solo incluye esos labels y respeta el orden elegido; si no hay preferencias, se usan todos los visibles.
+- `includeAllDocumentationLabels=true` ignora las preferencias guardadas del usuario y devuelve todos los labels visibles por rol; se usa para integraciones como MCP que necesitan el contexto completo.
 - Cuando un módulo o feature no tiene documentación, `documentationLabels` será un arreglo vacío.
 - Cada feature incluye `linkedFeatures`, listado de otras features del mismo proyecto con `{ id, name, moduleId, moduleName, reason, direction }`, donde `direction` es `references` (la feature actual referencia a la otra) o `referenced_by`.
 - La descripción (`reason`) del vínculo se puede actualizar vía `PATCH /qa/features/:featureId/linked-features/:linkedFeatureId` enviando `{ "reason": "texto" }` (acepta `null` para limpiar la nota). Ese mismo endpoint también permite mover el vínculo a otro target (`targetFeatureId`) eliminando la relación previa y creando la nueva con la razón existente (o la nueva si se incluye).

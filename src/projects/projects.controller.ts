@@ -101,8 +101,11 @@ export class ProjectsController {
   async structure(
     @CurrentUser() user: AccessTokenPayload,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Query('includeAllDocumentationLabels') includeAllDocumentationLabels?: string,
   ) {
-    return this.service.getStructure(user, id);
+    return this.service.getStructure(user, id, {
+      respectLabelPreferences: includeAllDocumentationLabels !== 'true',
+    });
   }
 
   @Get(':id/documentation/labels')

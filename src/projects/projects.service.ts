@@ -116,6 +116,10 @@ export type DocumentationLabelPreferencePayload = {
   selectedLabelIds: string[];
 };
 
+type ProjectStructureOptions = {
+  respectLabelPreferences?: boolean;
+};
+
 @Injectable()
 export class ProjectsService {
   constructor(
@@ -876,9 +880,14 @@ export class ProjectsService {
     return project ? { ...project, membershipRole } : null;
   }
 
-  async getStructure(user: AccessTokenPayload, projectId: string) {
+  async getStructure(
+    user: AccessTokenPayload,
+    projectId: string,
+    options: ProjectStructureOptions = {},
+  ) {
     const project = await this.ensureCanRead(user, projectId);
     const viewerRole = await this.resolveProjectRole(user.sub, project);
+    const respectLabelPreferences = options.respectLabelPreferences ?? true;
 
     const [rawModules, rawFeatures, labels, documentationFields, preference, featureLinkRows] =
       await this.prisma.$transaction([
@@ -983,10 +992,11 @@ export class ProjectsService {
     const visibleLabelMap = new Map(visibleLabels.map((label) => [label.id, label]));
 
     const rawPreferenceIds = preference?.documentationLabelIds ?? [];
-    const preferNone = rawPreferenceIds.length === 0;
-    const preferredOrder = preferNone
-      ? []
-      : rawPreferenceIds.filter((id) => visibleLabelMap.has(id));
+    const applyPreferences = respectLabelPreferences && Boolean(preference);
+    const preferNone = applyPreferences && rawPreferenceIds.length === 0;
+    const preferredOrder = applyPreferences
+      ? rawPreferenceIds.filter((id) => visibleLabelMap.has(id))
+      : [];
     const preferredSet = new Set(preferredOrder);
     const preferCustomOrder = preferredOrder.length > 0;
     const preferredOrderMap = new Map(preferredOrder.map((id, index) => [id, index]));

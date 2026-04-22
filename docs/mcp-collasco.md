@@ -31,7 +31,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 ## Tool Intent
 
 - `collasco_get_project`: retrieves the project record, such as name, status, visibility, description, and other project metadata.
-- `collasco_get_project_structure`: retrieves the structural project view, including modules, features, documentation labels, and linked features.
+- `collasco_get_project_structure`: retrieves the structural project view, including modules, features, documentation labels, and linked features. MCP requests the full visible documentation label set and does not apply the authenticated user's saved label-display preferences.
 - `collasco_get_project_labels`: retrieves the full project label definitions, including instructions, visibility roles, read-only roles, and ordering.
 - `collasco_get_module_or_feature_path`: derives a human-readable hierarchical module or feature path from the existing project structure response. 
 
