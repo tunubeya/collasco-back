@@ -12,6 +12,7 @@ import {
   UpdateTicketSectionDto,
   ListTicketsQueryDto,
   TicketScope,
+  TicketStatus,
 } from './dto/ticket.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import {
@@ -550,6 +551,7 @@ export class TicketsService {
   async list(query: ListTicketsQueryDto, user: AccessTokenPayload) {
     const { page = 1, limit = 20, scope, projectId, status } = query;
     const skip = (page - 1) * limit;
+    console.log(`[list] scope=${scope}, projectId=${projectId}, status=${status}, page=${page}, limit=${limit}, user=${user.sub}`);
 
     const where: any = {};
 
@@ -557,14 +559,14 @@ export class TicketsService {
       where.projectId = projectId;
     }
 
-    if (status) {
-      where.status = status;
-    }
-
     if (scope === TicketScope.MINE) {
       where.createdById = user.sub;
     } else if (scope === TicketScope.ASSIGNED) {
       where.assigneeId = user.sub;
+    } else if (scope === TicketScope.UNASSIGNED) {
+      where.assigneeId = null;
+    } else if (scope === TicketScope.RESOLVED) {
+      where.status = TicketStatus.RESOLVED;
     } else if (scope === TicketScope.ALL) {
       if (projectId) {
         const hasPermission = await hasProjectPermission(
@@ -586,6 +588,15 @@ export class TicketsService {
     } else if (scope === TicketScope.EXTERNAL) {
       // Tickets externos (creados por usuarios externos via público)
       where.NOT = { publicReporterEmail: null };
+    }
+
+    // Filtrar status (solo OPEN o PENDING, nunca RESOLVED a menos que sea scope RESOLVED)
+    if (scope !== TicketScope.RESOLVED) {
+      if (status) {
+        where.status = status;
+      } else {
+        where.status = { in: [TicketStatus.OPEN, TicketStatus.PENDING] };
+      }
     }
 
     const [items, total] = await Promise.all([
@@ -620,6 +631,41 @@ export class TicketsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  async getCounts(userId: string, projectId?: string) {
+    console.log(`[getCounts] userId=${userId}, projectId=${projectId}`);
+
+    const projectFilter = projectId ? { projectId } : { projectId: { in: [] as string[] } };
+    const myProjects = projectId
+      ? [projectId]
+      : (
+          await this.prisma.projectMember.findMany({
+            where: { userId },
+            select: { projectId: true },
+          })
+        ).map((m) => m.projectId);
+
+    if (!projectId && myProjects.length === 0) {
+      return { counts: { all: 0, mine: 0, assigned: 0, unassigned: 0, resolved: 0, external: 0 } };
+    }
+
+    const whereBase = projectId ? { projectId } : { projectId: { in: myProjects } };
+
+    const activeStatus = { in: [TicketStatus.OPEN, TicketStatus.PENDING] };
+
+    const [all, mine, assigned, unassigned, resolved, external] = await Promise.all([
+      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus } }),
+      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, createdById: userId } }),
+      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, assigneeId: userId } }),
+      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, assigneeId: null } }),
+      this.prisma.ticket.count({ where: { ...whereBase, status: TicketStatus.RESOLVED } }),
+      this.prisma.ticket.count({ where: { ...whereBase, NOT: { publicReporterEmail: null } } }),
+    ]);
+
+    console.log(`[getCounts] result: all=${all}, mine=${mine}, assigned=${assigned}, unassigned=${unassigned}, resolved=${resolved}, external=${external}`);
+
+    return { counts: { all, mine, assigned, unassigned, resolved, external } };
   }
 
   async uploadImage(

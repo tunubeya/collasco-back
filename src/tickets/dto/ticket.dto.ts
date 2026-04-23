@@ -20,6 +20,8 @@ export enum TicketScope {
   MINE = 'mine',
   ASSIGNED = 'assigned',
   ALL = 'all',
+  UNASSIGNED = 'unassigned',
+  RESOLVED = 'resolved',
   EXTERNAL = 'external',
 }
 
