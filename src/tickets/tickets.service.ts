@@ -71,11 +71,9 @@ export class TicketsService {
 
     if (notifyUsersToAdd.length > 0) {
       await this.prisma.ticketNotifyUser.createMany({ data: notifyUsersToAdd, skipDuplicates: true });
-      console.log(`[create] added ${notifyUsersToAdd.length} notify users to ticket ${ticket.id}`);
     }
     if (emailUsersToAdd.length > 0) {
       await this.prisma.ticketEmailUser.createMany({ data: emailUsersToAdd, skipDuplicates: true });
-      console.log(`[create] added ${emailUsersToAdd.length} email users to ticket ${ticket.id}`);
     }
 
     return this.findById(ticket.id, user);
@@ -218,9 +216,6 @@ export class TicketsService {
       const oldAssigneeId = ticket.assigneeId;
       const newAssigneeId = dto.assigneeId;
       const projectId = ticket.projectId;
-
-      console.log(`[update] ticket=${id} reassign from=${oldAssigneeId} to=${newAssigneeId}`);
-
       if (oldAssigneeId) {
         await this.prisma.ticketNotifyUser.deleteMany({
           where: { ticketId: id, userId: oldAssigneeId },
@@ -228,8 +223,6 @@ export class TicketsService {
         await this.prisma.ticketEmailUser.deleteMany({
           where: { ticketId: id, userId: oldAssigneeId },
         });
-        console.log(`[update] removed old assignee ${oldAssigneeId} from ticket ${id}`);
-
         const oldPrefs = await this.prisma.user.findUnique({
           where: { id: oldAssigneeId },
           select: { notifyUnassignedTickets: true, emailUnassignedTickets: true },
@@ -243,7 +236,6 @@ export class TicketsService {
               data: [{ ticketId: id, userId: oldAssigneeId }],
               skipDuplicates: true,
             });
-            console.log(`[update] re-added old assignee ${oldAssigneeId} to notify (notifyUnassigned=true)`);
           }
         }
         if (oldPrefs?.emailUnassignedTickets) {
@@ -255,7 +247,6 @@ export class TicketsService {
               data: [{ ticketId: id, userId: oldAssigneeId }],
               skipDuplicates: true,
             });
-            console.log(`[update] re-added old assignee ${oldAssigneeId} to email (emailUnassigned=true)`);
           }
         }
       }
@@ -270,14 +261,12 @@ export class TicketsService {
             data: [{ ticketId: id, userId: newAssigneeId }],
             skipDuplicates: true,
           });
-          console.log(`[update] added new assignee ${newAssigneeId} to notify (notifyAssigned=true)`);
         }
         if (newAssigneePrefs?.emailAssignedTickets) {
           await this.prisma.ticketEmailUser.createMany({
             data: [{ ticketId: id, userId: newAssigneeId }],
             skipDuplicates: true,
           });
-          console.log(`[update] added new assignee ${newAssigneeId} to email (emailAssigned=true)`);
         }
       }
     }
@@ -340,10 +329,8 @@ export class TicketsService {
     });
 
     if (ticket.publicReporterEmail && ticket.followUpToken) {
-      console.log(`[addSection] sending email to public reporter: ${ticket.publicReporterEmail}`);
       this.emailService
         .sendTicketNewSectionEmail(ticket.publicReporterEmail, ticket.title, ticket.followUpToken)
-        .then(() => console.log(`[addSection] public email sent to ${ticket.publicReporterEmail}`))
         .catch((err) => console.error(`[addSection] public email failed:`, err));
     }
 
@@ -551,8 +538,6 @@ export class TicketsService {
   async list(query: ListTicketsQueryDto, user: AccessTokenPayload) {
     const { page = 1, limit = 20, scope, projectId, status } = query;
     const skip = (page - 1) * limit;
-    console.log(`[list] scope=${scope}, projectId=${projectId}, status=${status}, page=${page}, limit=${limit}, user=${user.sub}`);
-
     const where: any = {};
 
     if (projectId) {
@@ -634,8 +619,6 @@ export class TicketsService {
   }
 
   async getCounts(userId: string, projectId?: string) {
-    console.log(`[getCounts] userId=${userId}, projectId=${projectId}`);
-
     const projectFilter = projectId ? { projectId } : { projectId: { in: [] as string[] } };
     const myProjects = projectId
       ? [projectId]
@@ -662,9 +645,6 @@ export class TicketsService {
       this.prisma.ticket.count({ where: { ...whereBase, status: TicketStatus.RESOLVED } }),
       this.prisma.ticket.count({ where: { ...whereBase, NOT: { publicReporterEmail: null } } }),
     ]);
-
-    console.log(`[getCounts] result: all=${all}, mine=${mine}, assigned=${assigned}, unassigned=${unassigned}, resolved=${resolved}, external=${external}`);
-
     return { counts: { all, mine, assigned, unassigned, resolved, external } };
   }
 
