@@ -209,6 +209,7 @@ describe('Collasco MCP HTTP server (e2e)', () => {
         'collasco_list_projects',
         'collasco_search_projects',
         'collasco_get_project',
+        'collasco_get_general_instructions',
         'collasco_get_project_labels',
         'collasco_get_project_documentation',
         'collasco_get_module_documentation',
@@ -222,6 +223,17 @@ describe('Collasco MCP HTTP server (e2e)', () => {
         'collasco_update_documentation',
       ]),
     );
+  });
+
+  it('lists the Collasco general instructions resource', async () => {
+    const result = await rpcResult<{
+      resources?: Array<{
+        uri: string;
+      }>;
+    }>('resources/list');
+    const resourceUris = (result.resources ?? []).map((resource) => resource.uri);
+
+    expect(resourceUris).toContain('collasco://instructions/general');
   });
 
   it('tool: collasco_list_projects - finds the automated E2E project through the project listing flow', async () => {

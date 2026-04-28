@@ -25,6 +25,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - `collasco_list_projects`
 - `collasco_search_projects`
 - `collasco_get_project`
+- `collasco_get_general_instructions`
 - `collasco_get_project_labels`
 - `collasco_get_project_documentation`
 - `collasco_get_module_documentation`
@@ -40,6 +41,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 ## Tool Intent
 
 - `collasco_get_project`: retrieves the project record, such as name, status, visibility, description, and other project metadata.
+- `collasco_get_general_instructions`: retrieves the shared Collasco `Instructions` manual used as the canonical operating guide for agents.
 - `collasco_get_project_labels`: retrieves the full project label definitions, including instructions, visibility roles, read-only roles, and ordering.
 - `collasco_get_project_documentation`: retrieves project-level documentation entries from the documentation API.
 - `collasco_get_module_documentation`: retrieves module-level documentation entries from the documentation API.
@@ -51,6 +53,12 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - `collasco_delete_module`: soft-deletes a module using the authenticated user's `module.write` permission.
 - `collasco_delete_feature`: soft-deletes a feature using the authenticated user's `feature.write` permission.
 - `collasco_update_documentation`: upserts project, module, or feature documentation content for a project label using the authenticated user's QA write permission.
+
+## Available Resources
+
+- `collasco://instructions/general`: the shared Collasco project-root manual filtered to the `Instructions` label, returned as JSON. This resource is backed by the shared manual link for the Collasco project, so agents can read the general Collasco instructions through MCP without requiring direct access to the private Collasco project.
+
+By default the MCP server reads shared manual `06045779-2a7a-4415-a9f4-3df75b95ac6e`. Override this with `COLLASCO_GENERAL_INSTRUCTIONS_SHARED_LINK_ID` when a different shared instructions manual should be exposed.
 
 ## Build And Start
 

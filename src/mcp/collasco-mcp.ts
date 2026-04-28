@@ -54,6 +54,8 @@ const JSON_RPC_VERSION = '2.0';
 const DEFAULT_API_BASE_URL = 'https://api.collasco.com/v1';
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_HTTP_PORT = 3333;
+const DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID = '06045779-2a7a-4415-a9f4-3df75b95ac6e';
+const GENERAL_INSTRUCTIONS_RESOURCE_URI = 'collasco://instructions/general';
 
 class McpError extends Error {
   constructor(
@@ -151,6 +153,29 @@ export class CollascoApiClient {
       `/qa/features/${resolvedFeatureId}/documentation`,
       accessToken,
     );
+  }
+
+  async getGeneralInstructions(): Promise<unknown> {
+    const linkId =
+      process.env.COLLASCO_GENERAL_INSTRUCTIONS_SHARED_LINK_ID ||
+      DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID;
+    const manualPath = `/public/manual/shared/${linkId}`;
+    const manual = await this.request(manualPath, { method: 'GET' });
+
+    return {
+      resourceUri: GENERAL_INSTRUCTIONS_RESOURCE_URI,
+      sharedManualUrl: new URL(
+        `/public/manual/shared/${linkId}`,
+        process.env.COLLASCO_WEB_BASE_URL || 'https://collasco.com',
+      ).toString(),
+      publicApiUrl: new URL(
+        stripLeadingSlashes(manualPath),
+        withTrailingSlash(this.apiBaseUrl),
+      ).toString(),
+      labelName: 'Instructions',
+      sharedLinkId: linkId,
+      manual,
+    };
   }
 
   async createModule(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
@@ -454,6 +479,7 @@ export class CollascoMcpServer {
             protocolVersion: MCP_PROTOCOL_VERSION,
             capabilities: {
               tools: {},
+              resources: {},
             },
             serverInfo: {
               name: 'collasco-mcp',
@@ -465,6 +491,14 @@ export class CollascoMcpServer {
           this.writeResult(id, {
             tools: toolDefinitions(this.includePasswordLoginTool),
           });
+          return;
+        case 'resources/list':
+          this.writeResult(id, {
+            resources: resourceDefinitions(),
+          });
+          return;
+        case 'resources/read':
+          this.writeResult(id, await this.handleResourceRead(request.params));
           return;
         case 'tools/call':
           this.writeResult(
@@ -515,6 +549,10 @@ export class CollascoMcpServer {
             2,
           ),
         );
+      }
+      case 'collasco_get_general_instructions': {
+        const instructions = await this.apiClient.getGeneralInstructions();
+        return toolTextResult(JSON.stringify(instructions, null, 2));
       }
       case 'collasco_list_projects': {
         const projects = await this.apiClient.listProjects(args, context.accessToken);
@@ -615,6 +653,12 @@ export class CollascoMcpServer {
           return jsonRpcResult(id, {
             tools: toolDefinitions(false),
           });
+        case 'resources/list':
+          return jsonRpcResult(id, {
+            resources: resourceDefinitions(),
+          });
+        case 'resources/read':
+          return jsonRpcResult(id, await this.handleResourceRead(request.params));
         case 'tools/call':
           return jsonRpcResult(
             id,
@@ -642,6 +686,24 @@ export class CollascoMcpServer {
   private writeMessage(message: JsonRpcResponse): void {
     const body = JSON.stringify(message);
     this.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+  }
+
+  private async handleResourceRead(params: Record<string, unknown> | undefined): Promise<unknown> {
+    const uri = requiredString(params?.uri, 'resource uri');
+    if (uri !== GENERAL_INSTRUCTIONS_RESOURCE_URI) {
+      throw new McpError(-32602, `Unknown resource: ${uri}`);
+    }
+
+    const instructions = await this.apiClient.getGeneralInstructions();
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify(instructions, null, 2),
+        },
+      ],
+    };
   }
 }
 
@@ -775,6 +837,7 @@ function initializeResult() {
     protocolVersion: MCP_PROTOCOL_VERSION,
     capabilities: {
       tools: {},
+      resources: {},
     },
     serverInfo: {
       name: 'collasco-mcp',
@@ -785,6 +848,15 @@ function initializeResult() {
 
 function toolDefinitions(includePasswordLoginTool: boolean) {
   const tools = [
+    {
+      name: 'collasco_get_general_instructions',
+      description:
+        'Get the shared Collasco general Instructions manual used as the canonical operating guide for agents.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
     {
       name: 'collasco_list_projects',
       description: 'List the projects that belong to the authenticated user.',
@@ -1017,6 +1089,18 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       },
     },
     ...tools,
+  ];
+}
+
+function resourceDefinitions() {
+  return [
+    {
+      uri: GENERAL_INSTRUCTIONS_RESOURCE_URI,
+      name: 'Collasco general instructions',
+      description:
+        'Shared Collasco project-root manual filtered to the Instructions label, used as the canonical operating guide for agents.',
+      mimeType: 'application/json',
+    },
   ];
 }
 
