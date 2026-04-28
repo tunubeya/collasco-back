@@ -18,6 +18,8 @@ Before drafting or changing Collasco documentation, read the project's documenta
 
 Do not create a separate `Overview` feature just to describe a Collasco module. Put general module-level overview content in the module's own `Overview` documentation field. Create features only for distinct functional areas, workflows, or implementation units.
 
+Do not create a Collasco feature for information that fits an existing documentation label on a module or feature. Before creating a feature, read the project's documentation labels and use the available labels where they fit. Collasco also contains label reference documentation; consult https://collasco.com/public/manual/shared/4fd19cab-cfee-4aba-81a8-828904c44104 when deciding whether something belongs in a label or in a feature. Create a feature only when it represents distinct functionality, behavior, workflow, or implementation scope.
+
 Avoid overlap between Collasco documentation sections. Use each section for a distinct purpose, and do not fill every available section by default. Only mandatory documentation sections must always be completed; optional sections should be used only when they add non-duplicative value.
 
 Describe current or desired behavior directly, without normative language. Avoid wording like `must`, `should`, or `needs to` when documenting behavior; use descriptive phrasing such as `does`, `uses`, `runs`, or `is intended to`.
