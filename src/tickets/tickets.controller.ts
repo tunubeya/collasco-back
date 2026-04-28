@@ -52,6 +52,11 @@ export class TicketsController {
     return this.ticketsService.list(query, user);
   }
 
+  @Get('tickets/counts')
+  getCounts(@Query('projectId') projectId: string | undefined, @CurrentUser() user: AccessTokenPayload) {
+    return this.ticketsService.getCounts(user.sub, projectId);
+  }
+
   @Get('projects/:projectId/tickets/autocomplete')
   searchFeatures(
     @Param('projectId') projectId: string,

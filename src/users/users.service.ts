@@ -84,15 +84,126 @@ export class UsersService {
       data: {
         name: dto.name ?? undefined,
         email: dto.email ?? undefined,
-        // isActive/role/lastLoginAt siguen reservados (admin)
       },
     });
   }
+
+  async updateTicketNotificationPrefs(userId: string, dto: { notifyAssignedTickets?: boolean; notifyUnassignedTickets?: boolean; emailAssignedTickets?: boolean; emailUnassignedTickets?: boolean }) {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        notifyAssignedTickets: dto.notifyAssignedTickets,
+        notifyUnassignedTickets: dto.notifyUnassignedTickets,
+        emailAssignedTickets: dto.emailAssignedTickets,
+        emailUnassignedTickets: dto.emailUnassignedTickets,
+      },
+    });
+
+    await this.syncTicketNotifications(userId, user, {
+      syncNotifyAssigned: dto.notifyAssignedTickets !== undefined,
+      syncNotifyUnassigned: dto.notifyUnassignedTickets !== undefined,
+      syncEmailAssigned: dto.emailAssignedTickets !== undefined,
+      syncEmailUnassigned: dto.emailUnassignedTickets !== undefined,
+    });
+
+    return user;
+  }
+
+  private async syncTicketNotifications(userId: string, user: { notifyAssignedTickets: boolean; notifyUnassignedTickets: boolean; emailAssignedTickets: boolean; emailUnassignedTickets: boolean }, flags: { syncNotifyAssigned: boolean; syncNotifyUnassigned: boolean; syncEmailAssigned: boolean; syncEmailUnassigned: boolean }) {
+    if (flags.syncNotifyAssigned) {
+      if (user.notifyAssignedTickets) {
+        const tickets = await this.prisma.ticket.findMany({
+          where: { assigneeId: userId },
+          select: { id: true, title: true },
+        });
+        await this.prisma.ticketNotifyUser.createMany({
+          data: tickets.map((t) => ({ ticketId: t.id, userId })),
+          skipDuplicates: true,
+        });
+      } else {
+        const deleted = await this.prisma.ticketNotifyUser.deleteMany({
+          where: { userId, ticket: { assigneeId: userId } },
+        });
+      }
+    }
+
+    if (flags.syncNotifyUnassigned) {
+      const accessibleProjectIds = await this.prisma.projectMember.findMany({
+        where: { userId },
+        select: { projectId: true },
+      });
+      const projectIds = accessibleProjectIds.map((p) => p.projectId);
+      if (user.notifyUnassignedTickets) {
+        const tickets = await this.prisma.ticket.findMany({
+          where: {
+            projectId: { in: projectIds },
+            OR: [{ assigneeId: null }, { assigneeId: { not: userId } }],
+          },
+          select: { id: true, title: true, assigneeId: true },
+        });
+        await this.prisma.ticketNotifyUser.createMany({
+          data: tickets.map((t) => ({ ticketId: t.id, userId })),
+          skipDuplicates: true,
+        });
+      } else {
+        const deleted = await this.prisma.ticketNotifyUser.deleteMany({
+          where: {
+            userId,
+            ticket: { projectId: { in: projectIds } },
+          },
+        });
+      }
+    }
+    if (flags.syncEmailAssigned) {
+      if (user.emailAssignedTickets) {
+        const tickets = await this.prisma.ticket.findMany({
+          where: { assigneeId: userId },
+          select: { id: true, title: true },
+        });
+        await this.prisma.ticketEmailUser.createMany({
+          data: tickets.map((t) => ({ ticketId: t.id, userId })),
+          skipDuplicates: true,
+        });
+      } else {
+        const deleted = await this.prisma.ticketEmailUser.deleteMany({
+          where: { userId, ticket: { assigneeId: userId } },
+        });
+      }
+    }
+    if (flags.syncEmailUnassigned) {
+      const accessibleProjectIds = await this.prisma.projectMember.findMany({
+        where: { userId },
+        select: { projectId: true },
+      });
+      const projectIds = accessibleProjectIds.map((p) => p.projectId);
+      if (user.emailUnassignedTickets) {
+        const tickets = await this.prisma.ticket.findMany({
+          where: {
+            projectId: { in: projectIds },
+            OR: [{ assigneeId: null }, { assigneeId: { not: userId } }],
+          },
+          select: { id: true, title: true, assigneeId: true },
+        });
+        await this.prisma.ticketEmailUser.createMany({
+          data: tickets.map((t) => ({ ticketId: t.id, userId })),
+          skipDuplicates: true,
+        });
+} else {
+        const deleted = await this.prisma.ticketEmailUser.deleteMany({
+          where: {
+            userId,
+            ticket: { projectId: { in: projectIds } },
+          },
+        });
+      }
+    }
+  }
+
   async updatePasswordHash(id: string, passwordHash: string) {
     return this.prisma.user.update({
       where: { id },
       data: { passwordHash },
-      select: { id: true }, // evita retornar hash por seguridad
+      select: { id: true },
     });
   }
 }
