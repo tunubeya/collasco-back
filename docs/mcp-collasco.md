@@ -17,6 +17,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - supports a local-only refresh-token bridge when started with `npm run mcp:collasco:http:login`
 - forwards the bearer access token to the Collasco API
 - retrieves projects through `GET /v1/projects/mine`
+- creates modules and features through the existing Collasco REST API
 - exposes OAuth protected-resource metadata for future hosted use
 
 ## Available Tools
@@ -28,6 +29,13 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - `collasco_get_project_documentation`
 - `collasco_get_module_documentation`
 - `collasco_get_feature_documentation`
+- `collasco_create_module`
+- `collasco_create_feature`
+- `collasco_update_module`
+- `collasco_update_feature`
+- `collasco_delete_module`
+- `collasco_delete_feature`
+- `collasco_update_documentation`
 
 ## Tool Intent
 
@@ -36,6 +44,13 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - `collasco_get_project_documentation`: retrieves project-level documentation entries from the documentation API.
 - `collasco_get_module_documentation`: retrieves module-level documentation entries from the documentation API.
 - `collasco_get_feature_documentation`: retrieves feature-level documentation entries from the documentation API.
+- `collasco_create_module`: creates a module in a project using the authenticated user's `module.write` permission.
+- `collasco_create_feature`: creates a feature in a module using the authenticated user's `feature.write` permission.
+- `collasco_update_module`: updates a module using the authenticated user's `module.write` permission.
+- `collasco_update_feature`: updates a feature using the authenticated user's `feature.write` permission.
+- `collasco_delete_module`: soft-deletes a module using the authenticated user's `module.write` permission.
+- `collasco_delete_feature`: soft-deletes a feature using the authenticated user's `feature.write` permission.
+- `collasco_update_documentation`: upserts project, module, or feature documentation content for a project label using the authenticated user's QA write permission.
 
 ## Build And Start
 
@@ -138,7 +153,19 @@ A live MCP integration test suite is available in:
 
 `test/mcp.e2e-spec.ts`
 
-These tests call the running HTTP MCP server through JSON-RPC. Start the MCP server first, then run the tests. The tests default to `http://127.0.0.1:3333/mcp`; override this with `COLLASCO_MCP_URL` when the server listens somewhere else. If the running server requires bearer authentication, set `COLLASCO_MCP_ACCESS_TOKEN` or `COLLASCO_ACCESS_TOKEN`.
+These tests call the running HTTP MCP server through JSON-RPC. The assistant cannot start an authenticated test server by itself because the login flow needs user credentials/tokens. Before asking the assistant to run the live MCP tests, start or restart the server yourself with:
+
+```bash
+npm run mcp:collasco:http:login
+```
+
+When the MCP server is not already running, the assistant cannot run the MCP tests and must ask the user to run the server first.
+
+Restart the MCP server after changing MCP code so it loads the latest `dist/mcp/collasco-mcp.js`. The tests default to `http://127.0.0.1:3333/mcp`; override this with `COLLASCO_MCP_URL` when the server listens somewhere else. If the running server requires bearer authentication from the test process, set `COLLASCO_MCP_ACCESS_TOKEN` or `COLLASCO_ACCESS_TOKEN`.
+
+## MCP Data Safety
+
+MCP tests and assistant-driven MCP tool calls must not alter live Collasco project contents unless the target project is exactly `Collasco Automated E2E Testsuite`. Treat every other project as read-only unless the user explicitly names that project and asks for a mutation.
 
 ## Running The MCP Tests
 
@@ -152,10 +179,11 @@ npm run test:mcp:e2e
 
 - MCP initialize: verifies the running MCP server identity
 - `tools/list`: verifies the expected Collasco MCP tools are exposed
-- `collasco_list_projects`: finds the Collasco Test Suite project through the project listing flow
-- `collasco_search_projects`: finds the Collasco Test Suite project when searching for `Test Suite`
+- `collasco_list_projects`: finds the `Collasco Automated E2E Testsuite` project through the project listing flow
+- `collasco_search_projects`: finds the `Collasco Automated E2E Testsuite` project when searching by name
 - `collasco_get_project_labels`: returns the `Overview` label and verifies that its instructions contain `why` and `what`
-- `collasco_get_project_documentation`: returns project-level documentation entries for the `Collasco Test Suite` project
+- `collasco_get_project_documentation`: returns project-level documentation entries for the `Collasco Automated E2E Testsuite` project
+- module/feature CRUD and documentation update: creates, updates, documents, and deletes E2E module/feature records in the `Collasco Automated E2E Testsuite` project
 - `collasco_get_feature_documentation`: returns feature-level documentation entries for the `Manual` feature
 
 ## Examples In MCP Clients
@@ -188,6 +216,22 @@ Show the documentation of feature a3585dad-1bd7-4b44-a357-ba287beef18e.
 
 ```text
 Show the project labels of project 8d1a8d99-987b-4bd0-8a19-ea93fccd95bd.
+```
+
+```text
+Create a module named "Billing" in project 8d1a8d99-987b-4bd0-8a19-ea93fccd95bd.
+```
+
+```text
+Create a feature named "Invoice export" in module d59b5cf1-bc95-438a-af48-9f38544bdb27 with priority HIGH.
+```
+
+```text
+Update the Overview documentation for module d59b5cf1-bc95-438a-af48-9f38544bdb27.
+```
+
+```text
+Delete feature a3585dad-1bd7-4b44-a357-ba287beef18e.
 ```
 
 ## Notes

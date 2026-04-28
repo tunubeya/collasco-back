@@ -46,7 +46,34 @@ type ProjectDocumentationResult = Array<{
   } | null;
 }>;
 
+type CreatedModuleResult = {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+};
+
+type CreatedFeatureResult = {
+  id: string;
+  moduleId: string;
+  name: string;
+  description: string | null;
+  priority: string | null;
+  status: string | null;
+};
+
+type DeleteModuleResult = {
+  ok: boolean;
+  deletedModuleIds: string[];
+};
+
+type DeleteFeatureResult = {
+  ok: boolean;
+  deletedFeatureId: string;
+};
+
 const DEFAULT_MCP_URL = 'http://127.0.0.1:3333/mcp';
+const E2E_PROJECT_NAME = 'Collasco Automated E2E Testsuite';
 const mcpUrl = process.env.COLLASCO_MCP_URL ?? DEFAULT_MCP_URL;
 const bearerToken = process.env.COLLASCO_MCP_ACCESS_TOKEN ?? process.env.COLLASCO_ACCESS_TOKEN;
 
@@ -186,29 +213,38 @@ describe('Collasco MCP HTTP server (e2e)', () => {
         'collasco_get_project_documentation',
         'collasco_get_module_documentation',
         'collasco_get_feature_documentation',
+        'collasco_create_module',
+        'collasco_create_feature',
+        'collasco_update_module',
+        'collasco_update_feature',
+        'collasco_delete_module',
+        'collasco_delete_feature',
+        'collasco_update_documentation',
       ]),
     );
   });
 
-  it('tool: collasco_list_projects - finds the Collasco Test Suite project through the project listing flow', async () => {
+  it('tool: collasco_list_projects - finds the automated E2E project through the project listing flow', async () => {
     const result = await callTool<ProjectListResult>('collasco_list_projects');
     const names = (result.items ?? []).map((project) => project.name);
 
-    expect(names).toContain('Collasco Test Suite');
+    expect(names).toContain(E2E_PROJECT_NAME);
   });
 
-  it('tool: collasco_search_projects - finds the Collasco Test Suite project when searching for Test Suite', async () => {
-    const result = await callTool<ProjectListResult>('collasco_search_projects', { q: 'Test Suite' });
+  it('tool: collasco_search_projects - finds the automated E2E project when searching by name', async () => {
+    const result = await callTool<ProjectListResult>('collasco_search_projects', {
+      q: E2E_PROJECT_NAME,
+    });
     const names = (result.items ?? []).map((project) => project.name);
 
-    expect(names).toContain('Collasco Test Suite');
+    expect(names).toContain(E2E_PROJECT_NAME);
   });
 
   it('tool: collasco_get_project_labels - returns the Overview label with instructions containing why and what', async () => {
     const projectList = await callTool<ProjectListResult>('collasco_search_projects', {
-      q: 'Collasco Test Suite',
+      q: E2E_PROJECT_NAME,
     });
-    const project = (projectList.items ?? []).find((entry) => entry.name === 'Collasco Test Suite');
+    const project = (projectList.items ?? []).find((entry) => entry.name === E2E_PROJECT_NAME);
 
     expect(project).toBeDefined();
 
@@ -222,17 +258,20 @@ describe('Collasco MCP HTTP server (e2e)', () => {
     expect(overview?.instructions?.toLowerCase()).toContain('what');
   });
 
-  it('tool: collasco_get_project_documentation - returns documentation entries for Collasco Test Suite', async () => {
+  it('tool: collasco_get_project_documentation - returns documentation entries for the automated E2E project', async () => {
     const projectList = await callTool<ProjectListResult>('collasco_search_projects', {
-      q: 'Collasco Test Suite',
+      q: E2E_PROJECT_NAME,
     });
-    const project = (projectList.items ?? []).find((entry) => entry.name === 'Collasco Test Suite');
+    const project = (projectList.items ?? []).find((entry) => entry.name === E2E_PROJECT_NAME);
 
     expect(project).toBeDefined();
 
-    const documentation = await callTool<ProjectDocumentationResult>('collasco_get_project_documentation', {
-      projectId: project?.id,
-    });
+    const documentation = await callTool<ProjectDocumentationResult>(
+      'collasco_get_project_documentation',
+      {
+        projectId: project?.id,
+      },
+    );
 
     expect(Array.isArray(documentation)).toBe(true);
     expect(documentation.length).toBeGreaterThan(0);
@@ -240,10 +279,129 @@ describe('Collasco MCP HTTP server (e2e)', () => {
     expect(documentation[0]?.label?.name).toBeDefined();
   });
 
-  it('tool: collasco_get_feature_documentation - returns documentation entries for the Manual feature', async () => {
-    const documentation = await callTool<ProjectDocumentationResult>('collasco_get_feature_documentation', {
-      featureId: '0a229c8d-1db5-4a1d-8730-961bdbca9193',
+  it('tool: module/feature CRUD and documentation update - creates, updates, documents, and deletes E2E records', async () => {
+    const projectList = await callTool<ProjectListResult>('collasco_search_projects', {
+      q: E2E_PROJECT_NAME,
     });
+    const project = (projectList.items ?? []).find((entry) => entry.name === E2E_PROJECT_NAME);
+
+    expect(project).toBeDefined();
+
+    const labels = await callTool<ProjectLabelResult>('collasco_get_project_labels', {
+      projectId: project?.id,
+    });
+    const overview = labels.find((label) => label.name === 'Overview');
+
+    expect(overview).toBeDefined();
+
+    const suffix = `${Date.now()}`;
+    let module: CreatedModuleResult | undefined;
+    let feature: CreatedFeatureResult | undefined;
+
+    try {
+      module = await callTool<CreatedModuleResult>('collasco_create_module', {
+        projectId: project?.id,
+        name: `MCP E2E Module ${suffix}`,
+        description: 'Created by the Collasco MCP automated E2E suite.',
+      });
+
+      expect(module.id).toBeDefined();
+      expect(module.projectId).toBe(project?.id);
+      expect(module.name).toBe(`MCP E2E Module ${suffix}`);
+
+      const updatedModule = await callTool<CreatedModuleResult>('collasco_update_module', {
+        moduleId: module.id,
+        name: `MCP E2E Module ${suffix} Updated`,
+        description: 'Updated by the Collasco MCP automated E2E suite.',
+      });
+
+      expect(updatedModule.name).toBe(`MCP E2E Module ${suffix} Updated`);
+
+      feature = await callTool<CreatedFeatureResult>('collasco_create_feature', {
+        moduleId: module.id,
+        name: `MCP E2E Feature ${suffix}`,
+        description: 'Created by the Collasco MCP automated E2E suite.',
+        priority: 'MEDIUM',
+        status: 'PENDING',
+      });
+
+      expect(feature.id).toBeDefined();
+      expect(feature.moduleId).toBe(module.id);
+      expect(feature.name).toBe(`MCP E2E Feature ${suffix}`);
+      expect(feature.priority).toBe('MEDIUM');
+      expect(feature.status).toBe('PENDING');
+
+      const updatedFeature = await callTool<CreatedFeatureResult>('collasco_update_feature', {
+        featureId: feature.id,
+        name: `MCP E2E Feature ${suffix} Updated`,
+        description: 'Updated by the Collasco MCP automated E2E suite.',
+        priority: 'HIGH',
+        status: 'IN_PROGRESS',
+      });
+
+      expect(updatedFeature.name).toBe(`MCP E2E Feature ${suffix} Updated`);
+      expect(updatedFeature.priority).toBe('HIGH');
+      expect(updatedFeature.status).toBe('IN_PROGRESS');
+
+      const moduleDocumentation = await callTool<ProjectDocumentationResult>(
+        'collasco_update_documentation',
+        {
+          entityType: 'module',
+          entityId: module.id,
+          labelId: overview?.id,
+          content: `MCP module documentation ${suffix}`,
+          isNotApplicable: false,
+        },
+      );
+      const updatedModuleOverview = moduleDocumentation.find(
+        (entry) => entry.label.name === 'Overview',
+      );
+
+      expect(updatedModuleOverview?.field?.content).toBe(`MCP module documentation ${suffix}`);
+      expect(updatedModuleOverview?.field?.isNotApplicable).toBe(false);
+
+      const featureDocumentation = await callTool<ProjectDocumentationResult>(
+        'collasco_update_documentation',
+        {
+          entityType: 'feature',
+          entityId: feature.id,
+          labelId: overview?.id,
+          content: `MCP feature documentation ${suffix}`,
+          isNotApplicable: false,
+        },
+      );
+      const updatedFeatureOverview = featureDocumentation.find(
+        (entry) => entry.label.name === 'Overview',
+      );
+
+      expect(updatedFeatureOverview?.field?.content).toBe(`MCP feature documentation ${suffix}`);
+      expect(updatedFeatureOverview?.field?.isNotApplicable).toBe(false);
+    } finally {
+      if (feature?.id) {
+        const deletedFeature = await callTool<DeleteFeatureResult>('collasco_delete_feature', {
+          featureId: feature.id,
+        });
+        expect(deletedFeature.ok).toBe(true);
+        expect(deletedFeature.deletedFeatureId).toBe(feature.id);
+      }
+
+      if (module?.id) {
+        const deletedModule = await callTool<DeleteModuleResult>('collasco_delete_module', {
+          moduleId: module.id,
+        });
+        expect(deletedModule.ok).toBe(true);
+        expect(deletedModule.deletedModuleIds).toContain(module.id);
+      }
+    }
+  });
+
+  it('tool: collasco_get_feature_documentation - returns documentation entries for the Manual feature', async () => {
+    const documentation = await callTool<ProjectDocumentationResult>(
+      'collasco_get_feature_documentation',
+      {
+        featureId: '0a229c8d-1db5-4a1d-8730-961bdbca9193',
+      },
+    );
 
     expect(Array.isArray(documentation)).toBe(true);
     expect(documentation.length).toBeGreaterThan(0);

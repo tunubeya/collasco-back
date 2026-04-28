@@ -44,6 +44,8 @@ type ToolCallContext = {
   includePasswordLoginTool: boolean;
 };
 
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
 type CollascoApiClientOptions = {
   allowPasswordLogin?: boolean;
 };
@@ -132,7 +134,10 @@ export class CollascoApiClient {
 
   async getProjectDocumentation(projectId?: string, accessToken?: string): Promise<unknown> {
     const resolvedProjectId = requiredString(projectId, 'projectId');
-    return this.authenticatedRequest(`/qa/projects/${resolvedProjectId}/documentation`, accessToken);
+    return this.authenticatedRequest(
+      `/qa/projects/${resolvedProjectId}/documentation`,
+      accessToken,
+    );
   }
 
   async getModuleDocumentation(moduleId?: string, accessToken?: string): Promise<unknown> {
@@ -142,7 +147,114 @@ export class CollascoApiClient {
 
   async getFeatureDocumentation(featureId?: string, accessToken?: string): Promise<unknown> {
     const resolvedFeatureId = requiredString(featureId, 'featureId');
-    return this.authenticatedRequest(`/qa/features/${resolvedFeatureId}/documentation`, accessToken);
+    return this.authenticatedRequest(
+      `/qa/features/${resolvedFeatureId}/documentation`,
+      accessToken,
+    );
+  }
+
+  async createModule(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const projectId = requiredString(args?.projectId, 'projectId');
+    const body = compactObject({
+      name: requiredString(args?.name, 'name'),
+      description: asOptionalString(args?.description),
+      parentModuleId: asOptionalString(args?.parentModuleId),
+      isRoot: asOptionalBoolean(args?.isRoot),
+    });
+
+    return this.authenticatedRequest(`/projects/${projectId}/modules`, accessToken, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async createFeature(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const moduleId = requiredString(args?.moduleId, 'moduleId');
+    const body = compactObject({
+      name: requiredString(args?.name, 'name'),
+      description: asOptionalString(args?.description),
+      priority: asOptionalString(args?.priority),
+      status: asOptionalString(args?.status),
+    });
+
+    return this.authenticatedRequest(`/modules/${moduleId}/features`, accessToken, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async updateModule(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const moduleId = requiredString(args?.moduleId, 'moduleId');
+    const body = compactObject({
+      name: asOptionalString(args?.name),
+      description: asOptionalString(args?.description),
+      parentModuleId: asOptionalString(args?.parentModuleId),
+      isRoot: asOptionalBoolean(args?.isRoot),
+    });
+
+    return this.authenticatedRequest(`/modules/${moduleId}`, accessToken, {
+      method: 'PATCH',
+      body,
+    });
+  }
+
+  async updateFeature(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const featureId = requiredString(args?.featureId, 'featureId');
+    const body = compactObject({
+      name: asOptionalString(args?.name),
+      description: asOptionalString(args?.description),
+      priority: asOptionalString(args?.priority),
+      status: asOptionalString(args?.status),
+      moduleId: asOptionalString(args?.moduleId),
+    });
+
+    return this.authenticatedRequest(`/features/${featureId}`, accessToken, {
+      method: 'PATCH',
+      body,
+    });
+  }
+
+  async deleteModule(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const moduleId = requiredString(args?.moduleId, 'moduleId');
+    const params = new URLSearchParams();
+    const cascade = asOptionalBoolean(args?.cascade);
+    const force = asOptionalBoolean(args?.force);
+    if (cascade !== undefined) params.set('cascade', String(cascade));
+    if (force !== undefined) params.set('force', String(force));
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+
+    return this.authenticatedRequest(`/modules/${moduleId}${query}`, accessToken, {
+      method: 'DELETE',
+    });
+  }
+
+  async deleteFeature(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const featureId = requiredString(args?.featureId, 'featureId');
+    const force = asOptionalBoolean(args?.force);
+    const query = force === undefined ? '' : `?force=${String(force)}`;
+
+    return this.authenticatedRequest(`/features/${featureId}${query}`, accessToken, {
+      method: 'DELETE',
+    });
+  }
+
+  async updateDocumentation(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const entityType = requiredDocumentationEntityType(args?.entityType);
+    const entityId = requiredString(args?.entityId, 'entityId');
+    const labelId = requiredString(args?.labelId, 'labelId');
+    const body = compactObject({
+      content: asOptionalString(args?.content),
+      isNotApplicable: asOptionalBoolean(args?.isNotApplicable),
+    });
+
+    return this.authenticatedRequest(
+      `/qa/${entityType}s/${entityId}/documentation/${labelId}`,
+      accessToken,
+      {
+        method: 'PUT',
+        body,
+      },
+    );
   }
 
   private async ensureAuthenticated(): Promise<void> {
@@ -152,7 +264,10 @@ export class CollascoApiClient {
 
   private async refreshAccessToken(refreshToken?: string): Promise<TokenSet> {
     const resolvedRefreshToken =
-      refreshToken ?? this.refreshedTokens?.refreshToken ?? this.auth?.refreshToken ?? process.env.COLLASCO_REFRESH_TOKEN;
+      refreshToken ??
+      this.refreshedTokens?.refreshToken ??
+      this.auth?.refreshToken ??
+      process.env.COLLASCO_REFRESH_TOKEN;
 
     if (!resolvedRefreshToken) {
       throw new McpError(-32001, 'No refresh token available.');
@@ -184,8 +299,16 @@ export class CollascoApiClient {
     return tokenSet;
   }
 
-  private async authenticatedRequest(path: string, accessToken?: string): Promise<unknown> {
-    let resolvedAccessToken = this.refreshedTokens?.accessToken ?? accessToken ?? process.env.COLLASCO_ACCESS_TOKEN;
+  private async authenticatedRequest(
+    path: string,
+    accessToken?: string,
+    init: {
+      method?: HttpMethod;
+      body?: unknown;
+    } = {},
+  ): Promise<unknown> {
+    let resolvedAccessToken =
+      this.refreshedTokens?.accessToken ?? accessToken ?? process.env.COLLASCO_ACCESS_TOKEN;
     if (!resolvedAccessToken && process.env.COLLASCO_REFRESH_TOKEN) {
       resolvedAccessToken = (await this.refreshAccessToken()).accessToken;
     }
@@ -196,7 +319,8 @@ export class CollascoApiClient {
 
     try {
       return await this.request(path, {
-        method: 'GET',
+        method: init.method ?? 'GET',
+        body: init.body,
         headers: this.accessHeaders(resolvedAccessToken),
       });
     } catch (error) {
@@ -206,14 +330,19 @@ export class CollascoApiClient {
 
       const refreshedTokens = await this.refreshAccessToken();
       return this.request(path, {
-        method: 'GET',
+        method: init.method ?? 'GET',
+        body: init.body,
         headers: this.accessHeaders(refreshedTokens.accessToken),
       });
     }
   }
 
   private canRefreshAccessToken(): boolean {
-    return Boolean(this.auth?.refreshToken || this.refreshedTokens?.refreshToken || process.env.COLLASCO_REFRESH_TOKEN);
+    return Boolean(
+      this.auth?.refreshToken ||
+        this.refreshedTokens?.refreshToken ||
+        process.env.COLLASCO_REFRESH_TOKEN,
+    );
   }
 
   private accessHeaders(accessToken?: string): Record<string, string> {
@@ -230,20 +359,23 @@ export class CollascoApiClient {
   private async request(
     path: string,
     init: {
-      method: 'GET' | 'POST';
+      method: HttpMethod;
       body?: unknown;
       headers?: Record<string, string>;
     },
   ): Promise<unknown> {
-    const response = await fetch(new URL(stripLeadingSlashes(path), withTrailingSlash(this.apiBaseUrl)), {
-      method: init.method,
-      headers: {
-        Accept: 'application/json',
-        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-        ...init.headers,
+    const response = await fetch(
+      new URL(stripLeadingSlashes(path), withTrailingSlash(this.apiBaseUrl)),
+      {
+        method: init.method,
+        headers: {
+          Accept: 'application/json',
+          ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+          ...init.headers,
+        },
+        body: init.body ? JSON.stringify(init.body) : undefined,
       },
-      body: init.body ? JSON.stringify(init.body) : undefined,
-    });
+    );
 
     const text = await response.text();
     const payload = text ? safeJsonParse(text) : null;
@@ -270,7 +402,8 @@ export class CollascoMcpServer {
   private readonly stdin = process.stdin;
   private readonly stdout = process.stdout;
   private buffer = Buffer.alloc(0);
-  private readonly includePasswordLoginTool = process.env.COLLASCO_MCP_ENABLE_PASSWORD_LOGIN === 'true';
+  private readonly includePasswordLoginTool =
+    process.env.COLLASCO_MCP_ENABLE_PASSWORD_LOGIN === 'true';
 
   start(): void {
     this.stdin.on('data', (chunk: Buffer) => {
@@ -349,7 +482,10 @@ export class CollascoMcpServer {
     }
   }
 
-  async handleToolCall(params: Record<string, unknown> | undefined, context: ToolCallContext): Promise<unknown> {
+  async handleToolCall(
+    params: Record<string, unknown> | undefined,
+    context: ToolCallContext,
+  ): Promise<unknown> {
     const name = requiredString(params?.name, 'tool name');
     const args = isRecord(params?.arguments) ? params?.arguments : undefined;
 
@@ -390,11 +526,17 @@ export class CollascoMcpServer {
         return toolTextResult(JSON.stringify(projects, null, 2));
       }
       case 'collasco_get_project': {
-        const project = await this.apiClient.getProject(asOptionalString(args?.projectId), context.accessToken);
+        const project = await this.apiClient.getProject(
+          asOptionalString(args?.projectId),
+          context.accessToken,
+        );
         return toolTextResult(JSON.stringify(project, null, 2));
       }
       case 'collasco_get_project_labels': {
-        const labels = await this.apiClient.getProjectLabels(asOptionalString(args?.projectId), context.accessToken);
+        const labels = await this.apiClient.getProjectLabels(
+          asOptionalString(args?.projectId),
+          context.accessToken,
+        );
         return toolTextResult(JSON.stringify(labels, null, 2));
       }
       case 'collasco_get_project_documentation': {
@@ -418,12 +560,43 @@ export class CollascoMcpServer {
         );
         return toolTextResult(JSON.stringify(documentation, null, 2));
       }
+      case 'collasco_create_module': {
+        const module = await this.apiClient.createModule(args, context.accessToken);
+        return toolTextResult(JSON.stringify(module, null, 2));
+      }
+      case 'collasco_create_feature': {
+        const feature = await this.apiClient.createFeature(args, context.accessToken);
+        return toolTextResult(JSON.stringify(feature, null, 2));
+      }
+      case 'collasco_update_module': {
+        const module = await this.apiClient.updateModule(args, context.accessToken);
+        return toolTextResult(JSON.stringify(module, null, 2));
+      }
+      case 'collasco_update_feature': {
+        const feature = await this.apiClient.updateFeature(args, context.accessToken);
+        return toolTextResult(JSON.stringify(feature, null, 2));
+      }
+      case 'collasco_delete_module': {
+        const result = await this.apiClient.deleteModule(args, context.accessToken);
+        return toolTextResult(JSON.stringify(result, null, 2));
+      }
+      case 'collasco_delete_feature': {
+        const result = await this.apiClient.deleteFeature(args, context.accessToken);
+        return toolTextResult(JSON.stringify(result, null, 2));
+      }
+      case 'collasco_update_documentation': {
+        const documentation = await this.apiClient.updateDocumentation(args, context.accessToken);
+        return toolTextResult(JSON.stringify(documentation, null, 2));
+      }
       default:
         throw new McpError(-32601, `Unknown tool: ${name}`);
     }
   }
 
-  async handleHttpMessage(request: JsonRpcRequest, accessToken: string): Promise<JsonRpcResponse | null> {
+  async handleHttpMessage(
+    request: JsonRpcRequest,
+    accessToken: string,
+  ): Promise<JsonRpcResponse | null> {
     if (!request || request.jsonrpc !== JSON_RPC_VERSION || !request.method) {
       return jsonRpcError(null, new McpError(-32600, 'Invalid JSON-RPC request.'));
     }
@@ -487,7 +660,9 @@ export class CollascoHttpMcpServer {
     });
 
     server.listen(this.port, this.host, () => {
-      process.stderr.write(`Collasco MCP HTTP server listening on http://${this.host}:${this.port}/mcp\n`);
+      process.stderr.write(
+        `Collasco MCP HTTP server listening on http://${this.host}:${this.port}/mcp\n`,
+      );
     });
   }
 
@@ -509,7 +684,11 @@ export class CollascoHttpMcpServer {
       return;
     }
 
-    if (req.method === 'GET' && requestUrl.pathname === '/mcp' && acceptsEventStream(req.headers.accept)) {
+    if (
+      req.method === 'GET' &&
+      requestUrl.pathname === '/mcp' &&
+      acceptsEventStream(req.headers.accept)
+    ) {
       sendJson(
         res,
         405,
@@ -541,11 +720,19 @@ export class CollascoHttpMcpServer {
     const rawBody = await readRequestBody(req);
     const payload = safeJsonParse(rawBody);
     if (!isRecord(payload)) {
-      sendJson(res, 400, jsonRpcError(null, new McpError(-32700, 'Invalid JSON body.')), corsHeaders());
+      sendJson(
+        res,
+        400,
+        jsonRpcError(null, new McpError(-32700, 'Invalid JSON body.')),
+        corsHeaders(),
+      );
       return;
     }
 
-    const response = await this.mcpServer.handleHttpMessage(payload as JsonRpcRequest, accessToken ?? '');
+    const response = await this.mcpServer.handleHttpMessage(
+      payload as JsonRpcRequest,
+      accessToken ?? '',
+    );
     if (!response) {
       sendEmpty(res, 202, corsHeaders());
       return;
@@ -569,11 +756,17 @@ export class CollascoHttpMcpServer {
   }
 
   private publicMcpUrl(): string {
-    return process.env.COLLASCO_MCP_PUBLIC_URL || new URL('/mcp', withTrailingSlash(this.publicBaseUrl())).toString();
+    return (
+      process.env.COLLASCO_MCP_PUBLIC_URL ||
+      new URL('/mcp', withTrailingSlash(this.publicBaseUrl())).toString()
+    );
   }
 
   private allowsRefreshTokenAuth(): boolean {
-    return process.env.COLLASCO_MCP_ALLOW_REFRESH_TOKEN_AUTH === 'true' && Boolean(process.env.COLLASCO_REFRESH_TOKEN);
+    return (
+      process.env.COLLASCO_MCP_ALLOW_REFRESH_TOKEN_AUTH === 'true' &&
+      Boolean(process.env.COLLASCO_REFRESH_TOKEN)
+    );
   }
 }
 
@@ -630,7 +823,8 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
     },
     {
       name: 'collasco_get_project_labels',
-      description: 'Get the full project label definitions, including instructions and role visibility.',
+      description:
+        'Get the full project label definitions, including instructions and role visibility.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -672,6 +866,139 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
         required: ['featureId'],
       },
     },
+    {
+      name: 'collasco_create_module',
+      description: 'Create a module in a Collasco project.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project UUID.' },
+          name: { type: 'string', description: 'Module name.' },
+          description: { type: 'string', description: 'Optional module description.' },
+          parentModuleId: { type: 'string', description: 'Optional parent module UUID.' },
+          isRoot: { type: 'boolean', description: 'Whether this module is a root module.' },
+        },
+        required: ['projectId', 'name'],
+      },
+    },
+    {
+      name: 'collasco_create_feature',
+      description: 'Create a feature in a Collasco module.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string', description: 'Module UUID.' },
+          name: { type: 'string', description: 'Feature name.' },
+          description: { type: 'string', description: 'Optional feature description.' },
+          priority: {
+            type: 'string',
+            enum: ['LOW', 'MEDIUM', 'HIGH'],
+            description: 'Optional feature priority.',
+          },
+          status: {
+            type: 'string',
+            enum: ['PENDING', 'IN_PROGRESS', 'DONE'],
+            description: 'Optional feature status.',
+          },
+        },
+        required: ['moduleId', 'name'],
+      },
+    },
+    {
+      name: 'collasco_update_module',
+      description: 'Update a Collasco module.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string', description: 'Module UUID.' },
+          name: { type: 'string', description: 'Optional new module name.' },
+          description: { type: 'string', description: 'Optional new module description.' },
+          parentModuleId: { type: 'string', description: 'Optional new parent module UUID.' },
+          isRoot: { type: 'boolean', description: 'Optional root-module flag.' },
+        },
+        required: ['moduleId'],
+      },
+    },
+    {
+      name: 'collasco_update_feature',
+      description: 'Update a Collasco feature.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          featureId: { type: 'string', description: 'Feature UUID.' },
+          moduleId: { type: 'string', description: 'Optional target module UUID.' },
+          name: { type: 'string', description: 'Optional new feature name.' },
+          description: { type: 'string', description: 'Optional new feature description.' },
+          priority: {
+            type: 'string',
+            enum: ['LOW', 'MEDIUM', 'HIGH'],
+            description: 'Optional feature priority.',
+          },
+          status: {
+            type: 'string',
+            enum: ['PENDING', 'IN_PROGRESS', 'DONE'],
+            description: 'Optional feature status.',
+          },
+        },
+        required: ['featureId'],
+      },
+    },
+    {
+      name: 'collasco_delete_module',
+      description: 'Delete a Collasco module.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string', description: 'Module UUID.' },
+          cascade: {
+            type: 'boolean',
+            description: 'Whether to delete child modules/features as a subtree.',
+          },
+          force: {
+            type: 'boolean',
+            description: 'Whether to delete even when published versions exist.',
+          },
+        },
+        required: ['moduleId'],
+      },
+    },
+    {
+      name: 'collasco_delete_feature',
+      description: 'Delete a Collasco feature.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          featureId: { type: 'string', description: 'Feature UUID.' },
+          force: {
+            type: 'boolean',
+            description: 'Whether to delete even when a published version exists.',
+          },
+        },
+        required: ['featureId'],
+      },
+    },
+    {
+      name: 'collasco_update_documentation',
+      description: 'Update documentation content for a project, module, or feature label.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          entityType: {
+            type: 'string',
+            enum: ['project', 'module', 'feature'],
+            description: 'Documentation entity type.',
+          },
+          entityId: { type: 'string', description: 'Project, module, or feature UUID.' },
+          labelId: { type: 'string', description: 'Project label UUID.' },
+          content: { type: 'string', description: 'Optional documentation content.' },
+          isNotApplicable: {
+            type: 'boolean',
+            description: 'Optional not-applicable flag for this documentation field.',
+          },
+        },
+        required: ['entityType', 'entityId', 'labelId'],
+      },
+    },
   ];
 
   if (!includePasswordLoginTool) return tools;
@@ -679,7 +1006,8 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
   return [
     {
       name: 'collasco_login',
-      description: 'Log into the Collasco API with email/password or configured environment variables.',
+      description:
+        'Log into the Collasco API with email/password or configured environment variables.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -768,12 +1096,20 @@ function sendJson(
   res.end(body);
 }
 
-function sendEmpty(res: ServerResponse, statusCode: number, headers: Record<string, string> = {}): void {
+function sendEmpty(
+  res: ServerResponse,
+  statusCode: number,
+  headers: Record<string, string> = {},
+): void {
   res.writeHead(statusCode, headers);
   res.end();
 }
 
-function sendUnauthorized(res: ServerResponse, resourceUrl: string, description = 'Authorization required.'): void {
+function sendUnauthorized(
+  res: ServerResponse,
+  resourceUrl: string,
+  description = 'Authorization required.',
+): void {
   sendJson(
     res,
     401,
@@ -804,6 +1140,9 @@ function protectedResourceMetadata(resourceUrl: string): Record<string, unknown>
       'collasco:project-documentation:read',
       'collasco:module-documentation:read',
       'collasco:feature-documentation:read',
+      'collasco:modules:write',
+      'collasco:features:write',
+      'collasco:documentation:write',
     ],
   };
 }
@@ -891,6 +1230,29 @@ function asOptionalNumber(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function asOptionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (value.toLowerCase() === 'true') return true;
+    if (value.toLowerCase() === 'false') return false;
+  }
+  return undefined;
+}
+
+function compactObject(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined),
+  );
+}
+
+function requiredDocumentationEntityType(value: unknown): 'project' | 'module' | 'feature' {
+  const entityType = requiredString(value, 'entityType').toLowerCase();
+  if (entityType === 'project' || entityType === 'module' || entityType === 'feature') {
+    return entityType;
+  }
+  throw new McpError(-32602, 'entityType must be project, module, or feature.');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
