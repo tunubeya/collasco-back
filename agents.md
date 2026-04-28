@@ -20,6 +20,8 @@ Do not create a separate `Overview` feature just to describe a Collasco module. 
 
 Avoid overlap between Collasco documentation sections. Use each section for a distinct purpose, and do not fill every available section by default. Only mandatory documentation sections must always be completed; optional sections should be used only when they add non-duplicative value.
 
+Describe current or desired behavior directly, without normative language. Avoid wording like `must`, `should`, or `needs to` when documenting behavior; use descriptive phrasing such as `does`, `uses`, `runs`, or `is intended to`.
+
 Collasco documentation content must be written as supported HTML fragments, not Markdown. Supported tags include bold, italic, underline, numbered and unnumbered lists, code, and preformatted text.
 
 Format Collasco documentation for readability: use short paragraphs, leave blank lines between logical blocks in proposed HTML source for review, and prefer proper `<ul>`, `<ol>`, `<li>`, `<code>`, and `<pre>` blocks instead of dense inline text. Do not rely on source whitespace being preserved after saving in Collasco; Collasco serializes content as compact HTML. For visible blank lines, insert explicit empty paragraphs (`<p></p>`). When writing lists, match the Collasco editor style by wrapping each list item in a paragraph, for example `<ul><li><p>Item text</p></li></ul>`.
