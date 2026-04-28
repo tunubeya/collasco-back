@@ -2,6 +2,8 @@
 
 Always use descriptive commits that name the actual subject of the change.
 
+When writing multi-line text to external systems such as GitHub issues or Collasco documentation, use real line breaks or valid HTML block structure. Do not write escaped newline sequences like `\n` into user-facing content.
+
 ## MCP
 
 Never alter live Collasco project contents through MCP unless the target project is exactly `Collasco Automated E2E Testsuite`. Treat every other project as read-only unless the user explicitly names that project and asks for a mutation.
