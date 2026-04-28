@@ -2,7 +2,9 @@
 
 Always use descriptive commits that name the actual subject of the change.
 
-When writing multi-line text to external systems such as GitHub issues or Collasco documentation, use real line breaks or valid HTML block structure. Do not write escaped newline sequences like `\n` into user-facing content.
+## GitHub
+
+When writing multi-line text to GitHub issues, comments, pull requests, or project items, use real line breaks. Do not write escaped newline sequences like `\n` into user-facing GitHub content.
 
 ## MCP
 
