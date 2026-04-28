@@ -154,6 +154,15 @@ export class QaController {
     return this.qaService.getTestRun(userId, runId);
   }
 
+  @Delete('test-runs/:runId')
+  async deleteTestRun(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Param('runId', ParseUUIDPipe) runId: string,
+  ) {
+    const userId = this.resolveUserId(user);
+    return this.qaService.deleteTestRun(userId, runId);
+  }
+
   @Get('features/:featureId/test-runs')
   async listTestRuns(
     @CurrentUser() user: AccessTokenPayload | undefined,

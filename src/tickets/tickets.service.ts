@@ -12,6 +12,7 @@ import {
   UpdateTicketSectionDto,
   ListTicketsQueryDto,
   TicketScope,
+  TicketStatus,
 } from './dto/ticket.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import {
@@ -54,6 +55,26 @@ export class TicketsService {
         authorId: user.sub,
       },
     });
+
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId },
+      select: { userId: true, user: { select: { notifyUnassignedTickets: true, emailUnassignedTickets: true } } },
+    });
+
+    const notifyUsersToAdd = members
+      .filter((m) => m.user.notifyUnassignedTickets)
+      .map((m) => ({ ticketId: ticket.id, userId: m.userId }));
+
+    const emailUsersToAdd = members
+      .filter((m) => m.user.emailUnassignedTickets)
+      .map((m) => ({ ticketId: ticket.id, userId: m.userId }));
+
+    if (notifyUsersToAdd.length > 0) {
+      await this.prisma.ticketNotifyUser.createMany({ data: notifyUsersToAdd, skipDuplicates: true });
+    }
+    if (emailUsersToAdd.length > 0) {
+      await this.prisma.ticketEmailUser.createMany({ data: emailUsersToAdd, skipDuplicates: true });
+    }
 
     return this.findById(ticket.id, user);
   }
@@ -191,6 +212,65 @@ export class TicketsService {
       PERMISSION_KEYS.TICKET_MANAGE,
     );
 
+    if (dto.assigneeId !== undefined && dto.assigneeId !== ticket.assigneeId) {
+      const oldAssigneeId = ticket.assigneeId;
+      const newAssigneeId = dto.assigneeId;
+      const projectId = ticket.projectId;
+      if (oldAssigneeId) {
+        await this.prisma.ticketNotifyUser.deleteMany({
+          where: { ticketId: id, userId: oldAssigneeId },
+        });
+        await this.prisma.ticketEmailUser.deleteMany({
+          where: { ticketId: id, userId: oldAssigneeId },
+        });
+        const oldPrefs = await this.prisma.user.findUnique({
+          where: { id: oldAssigneeId },
+          select: { notifyUnassignedTickets: true, emailUnassignedTickets: true },
+        });
+        if (oldPrefs?.notifyUnassignedTickets) {
+          const isMember = await this.prisma.projectMember.findFirst({
+            where: { userId: oldAssigneeId, projectId },
+          });
+          if (isMember) {
+            await this.prisma.ticketNotifyUser.createMany({
+              data: [{ ticketId: id, userId: oldAssigneeId }],
+              skipDuplicates: true,
+            });
+          }
+        }
+        if (oldPrefs?.emailUnassignedTickets) {
+          const isMember = await this.prisma.projectMember.findFirst({
+            where: { userId: oldAssigneeId, projectId },
+          });
+          if (isMember) {
+            await this.prisma.ticketEmailUser.createMany({
+              data: [{ ticketId: id, userId: oldAssigneeId }],
+              skipDuplicates: true,
+            });
+          }
+        }
+      }
+
+      if (newAssigneeId) {
+        const newAssigneePrefs = await this.prisma.user.findUnique({
+          where: { id: newAssigneeId },
+          select: { notifyAssignedTickets: true, emailAssignedTickets: true },
+        });
+        if (newAssigneePrefs?.notifyAssignedTickets) {
+          await this.prisma.ticketNotifyUser.createMany({
+            data: [{ ticketId: id, userId: newAssigneeId }],
+            skipDuplicates: true,
+          });
+        }
+        if (newAssigneePrefs?.emailAssignedTickets) {
+          await this.prisma.ticketEmailUser.createMany({
+            data: [{ ticketId: id, userId: newAssigneeId }],
+            skipDuplicates: true,
+          });
+        }
+      }
+    }
+
     return this.prisma.ticket.update({
       where: { id },
       data: {
@@ -249,10 +329,8 @@ export class TicketsService {
     });
 
     if (ticket.publicReporterEmail && ticket.followUpToken) {
-      console.log(`[addSection] sending email to public reporter: ${ticket.publicReporterEmail}`);
       this.emailService
         .sendTicketNewSectionEmail(ticket.publicReporterEmail, ticket.title, ticket.followUpToken)
-        .then(() => console.log(`[addSection] public email sent to ${ticket.publicReporterEmail}`))
         .catch((err) => console.error(`[addSection] public email failed:`, err));
     }
 
@@ -460,21 +538,20 @@ export class TicketsService {
   async list(query: ListTicketsQueryDto, user: AccessTokenPayload) {
     const { page = 1, limit = 20, scope, projectId, status } = query;
     const skip = (page - 1) * limit;
-
     const where: any = {};
 
     if (projectId) {
       where.projectId = projectId;
     }
 
-    if (status) {
-      where.status = status;
-    }
-
     if (scope === TicketScope.MINE) {
       where.createdById = user.sub;
     } else if (scope === TicketScope.ASSIGNED) {
       where.assigneeId = user.sub;
+    } else if (scope === TicketScope.UNASSIGNED) {
+      where.assigneeId = null;
+    } else if (scope === TicketScope.RESOLVED) {
+      where.status = TicketStatus.RESOLVED;
     } else if (scope === TicketScope.ALL) {
       if (projectId) {
         const hasPermission = await hasProjectPermission(
@@ -496,6 +573,15 @@ export class TicketsService {
     } else if (scope === TicketScope.EXTERNAL) {
       // Tickets externos (creados por usuarios externos via público)
       where.NOT = { publicReporterEmail: null };
+    }
+
+    // Filtrar status (solo OPEN o PENDING, nunca RESOLVED a menos que sea scope RESOLVED)
+    if (scope !== TicketScope.RESOLVED) {
+      if (status) {
+        where.status = status;
+      } else {
+        where.status = { in: [TicketStatus.OPEN, TicketStatus.PENDING] };
+      }
     }
 
     const [items, total] = await Promise.all([
@@ -530,6 +616,36 @@ export class TicketsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  async getCounts(userId: string, projectId?: string) {
+    const projectFilter = projectId ? { projectId } : { projectId: { in: [] as string[] } };
+    const myProjects = projectId
+      ? [projectId]
+      : (
+          await this.prisma.projectMember.findMany({
+            where: { userId },
+            select: { projectId: true },
+          })
+        ).map((m) => m.projectId);
+
+    if (!projectId && myProjects.length === 0) {
+      return { counts: { all: 0, mine: 0, assigned: 0, unassigned: 0, resolved: 0, external: 0 } };
+    }
+
+    const whereBase = projectId ? { projectId } : { projectId: { in: myProjects } };
+
+    const activeStatus = { in: [TicketStatus.OPEN, TicketStatus.PENDING] };
+
+    const [all, mine, assigned, unassigned, resolved, external] = await Promise.all([
+      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus } }),
+      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, createdById: userId } }),
+      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, assigneeId: userId } }),
+      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, assigneeId: null } }),
+      this.prisma.ticket.count({ where: { ...whereBase, status: TicketStatus.RESOLVED } }),
+      this.prisma.ticket.count({ where: { ...whereBase, NOT: { publicReporterEmail: null } } }),
+    ]);
+    return { counts: { all, mine, assigned, unassigned, resolved, external } };
   }
 
   async uploadImage(
