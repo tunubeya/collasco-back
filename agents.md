@@ -10,6 +10,8 @@ Never alter live Collasco project contents through MCP unless the target project
 
 Before changing documentation in Collasco, first show the exact proposed content and ask for approval. Minor Collasco documentation edits may be applied directly only when they fix typos, grammar, formatting, readability, or minor rewording without materially changing the meaning. Ask for approval before making substantive Collasco documentation changes.
 
+Before drafting or changing Collasco documentation, read the project's documentation labels. Use the label definitions to know which sections exist, which sections are mandatory, and what instructions each section provides.
+
 Do not create a separate `Overview` feature just to describe a Collasco module. Put general module-level overview content in the module's own `Overview` documentation field. Create features only for distinct functional areas, workflows, or implementation units.
 
 Avoid overlap between Collasco documentation sections. Use each section for a distinct purpose, and do not fill every available section by default. Only mandatory documentation sections must always be completed; optional sections should be used only when they add non-duplicative value.
