@@ -90,7 +90,21 @@ export class PublicTicketsService {
           },
         },
       },
+      include: { project: { select: { name: true } } },
     });
+
+    console.log(`[createTicket] created ticket=${ticket.id}, sending email to=${dto.email}`);
+
+    this.emailService
+      .sendPublicTicketCreatedEmail(
+        dto.email.trim().toLowerCase(),
+        dto.name?.trim() || null,
+        ticket.project.name,
+        title,
+        followUpToken,
+      )
+      .then(() => console.log(`[createTicket] email sent successfully`))
+      .catch((err) => console.error(`[createTicket] email failed:`, err));
 
     return {
       ticketId: ticket.id,
