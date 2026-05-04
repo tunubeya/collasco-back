@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 type JsonRpcId = string | number | null;

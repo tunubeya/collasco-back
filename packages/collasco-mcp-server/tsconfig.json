@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "incremental": false,
+    "outDir": "dist",
+    "rootDir": "../../src/mcp",
+    "sourceMap": false
+  },
+  "files": ["../../src/mcp/collasco-mcp.ts"]
+}

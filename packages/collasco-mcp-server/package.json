@@ -1,0 +1,32 @@
+{
+  "name": "@collasco/mcp-server",
+  "version": "0.1.0",
+  "description": "Collasco MCP server for local and hosted MCP clients.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "bin": {
+    "collasco-mcp": "dist/collasco-mcp.js",
+    "collasco-mcp-login": "bin/collasco-mcp-login.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "pack:dry": "npm run build && npm pack --dry-run",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.17.1",
+    "typescript": "^5.7.3"
+  }
+}

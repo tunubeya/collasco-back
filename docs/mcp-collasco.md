@@ -113,6 +113,53 @@ You can change the port with:
 COLLASCO_MCP_HTTP_PORT=3334 npm run mcp:collasco:http
 ```
 
+## Private npm package
+
+The distributable MCP server package lives in:
+
+```text
+packages/collasco-mcp-server
+```
+
+It publishes as the restricted scoped package:
+
+```text
+@collasco/mcp-server
+```
+
+Build and inspect the package contents from the back-end root:
+
+```bash
+npm run mcp:collasco:package:build
+npm run mcp:collasco:package:pack
+```
+
+Publish it from the package directory:
+
+```bash
+cd packages/collasco-mcp-server
+npm publish
+```
+
+Colleagues can install and start it with:
+
+```bash
+npm install -g @collasco/mcp-server
+collasco-mcp-login
+```
+
+Or run it without a global install:
+
+```bash
+npx --package @collasco/mcp-server collasco-mcp-login
+```
+
+Then register the local HTTP MCP endpoint in Codex:
+
+```bash
+codex mcp add collasco --url http://127.0.0.1:3333/mcp
+```
+
 ## Authentication
 
 Hosted HTTP MCP requests must include a Collasco access token on every request:
