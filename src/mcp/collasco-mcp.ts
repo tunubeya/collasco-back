@@ -55,7 +55,9 @@ const DEFAULT_API_BASE_URL = 'https://api.collasco.com/v1';
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_HTTP_PORT = 3333;
 const DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID = '06045779-2a7a-4415-a9f4-3df75b95ac6e';
+const DEFAULT_DOCUMENTATION_CATALOG_SHARED_LINK_ID = '4fd19cab-cfee-4aba-81a8-828904c44104';
 const GENERAL_INSTRUCTIONS_RESOURCE_URI = 'collasco://instructions/general';
+const DOCUMENTATION_CATALOG_RESOURCE_URI = 'collasco://documentation/standard-label-catalog';
 
 class McpError extends Error {
   constructor(
@@ -115,6 +117,10 @@ export class CollascoApiClient {
     const page = asOptionalNumber(args?.page);
     const limit = asOptionalNumber(args?.limit);
 
+    if (!q) {
+      return this.listProjectsFromProfile(page, limit, accessToken);
+    }
+
     if (q) params.set('q', q);
     if (page !== undefined) params.set('page', String(page));
     if (limit !== undefined) params.set('limit', String(limit));
@@ -122,6 +128,63 @@ export class CollascoApiClient {
     const query = params.size > 0 ? `?${params.toString()}` : '';
 
     return this.authenticatedRequest(`/projects/mine${query}`, accessToken);
+  }
+
+  private async listProjectsFromProfile(
+    page: number | undefined,
+    limit: number | undefined,
+    accessToken?: string,
+  ): Promise<unknown> {
+    const profile = (await this.authenticatedRequest('/users/me/profile', accessToken)) as {
+      ownedProjects?: Array<{ id: string; name: string; slug?: string | null }>;
+      memberships?: Array<{
+        project?: { id: string; name: string; ownerId?: string | null } | null;
+      }>;
+    };
+
+    const uniqueProjects = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        slug: string | null;
+        hasAccess: boolean;
+      }
+    >();
+
+    for (const project of profile.ownedProjects ?? []) {
+      uniqueProjects.set(project.id, {
+        id: project.id,
+        name: project.name,
+        slug: project.slug ?? null,
+        hasAccess: true,
+      });
+    }
+
+    for (const membership of profile.memberships ?? []) {
+      const project = membership.project;
+      if (!project) continue;
+      const existing = uniqueProjects.get(project.id);
+      uniqueProjects.set(project.id, {
+        id: project.id,
+        name: project.name,
+        slug: existing?.slug ?? null,
+        hasAccess: true,
+      });
+    }
+
+    const allItems = Array.from(uniqueProjects.values()).sort((a, b) => a.name.localeCompare(b.name));
+    const safePage = Math.max(page ?? 1, 1);
+    const safeLimit = Math.min(Math.max(limit ?? 20, 1), 100);
+    const start = (safePage - 1) * safeLimit;
+    const items = allItems.slice(start, start + safeLimit);
+
+    return {
+      items,
+      total: allItems.length,
+      page: safePage,
+      limit: safeLimit,
+    };
   }
 
   async getProject(projectId?: string, accessToken?: string): Promise<unknown> {
@@ -159,11 +222,35 @@ export class CollascoApiClient {
     const linkId =
       process.env.COLLASCO_GENERAL_INSTRUCTIONS_SHARED_LINK_ID ||
       DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID;
+    return this.getSharedManualResource({
+      resourceUri: GENERAL_INSTRUCTIONS_RESOURCE_URI,
+      labelName: 'Instructions',
+      sharedLinkId: linkId,
+    });
+  }
+
+  async getDocumentationCatalog(): Promise<unknown> {
+    const linkId =
+      process.env.COLLASCO_DOCUMENTATION_CATALOG_SHARED_LINK_ID ||
+      DEFAULT_DOCUMENTATION_CATALOG_SHARED_LINK_ID;
+    return this.getSharedManualResource({
+      resourceUri: DOCUMENTATION_CATALOG_RESOURCE_URI,
+      labelName: 'Standard Documentation Structure',
+      sharedLinkId: linkId,
+    });
+  }
+
+  private async getSharedManualResource(params: {
+    resourceUri: string;
+    labelName: string;
+    sharedLinkId: string;
+  }): Promise<unknown> {
+    const linkId = params.sharedLinkId;
     const manualPath = `/public/manual/shared/${linkId}`;
     const manual = await this.request(manualPath, { method: 'GET' });
 
     return {
-      resourceUri: GENERAL_INSTRUCTIONS_RESOURCE_URI,
+      resourceUri: params.resourceUri,
       sharedManualUrl: new URL(
         `/public/manual/shared/${linkId}`,
         process.env.COLLASCO_WEB_BASE_URL || 'https://collasco.com',
@@ -172,7 +259,7 @@ export class CollascoApiClient {
         stripLeadingSlashes(manualPath),
         withTrailingSlash(this.apiBaseUrl),
       ).toString(),
-      labelName: 'Instructions',
+      labelName: params.labelName,
       sharedLinkId: linkId,
       manual,
     };
@@ -554,6 +641,10 @@ export class CollascoMcpServer {
         const instructions = await this.apiClient.getGeneralInstructions();
         return toolTextResult(JSON.stringify(instructions, null, 2));
       }
+      case 'collasco_get_standard_documentation_catalog': {
+        const catalog = await this.apiClient.getDocumentationCatalog();
+        return toolTextResult(JSON.stringify(catalog, null, 2));
+      }
       case 'collasco_list_projects': {
         const projects = await this.apiClient.listProjects(args, context.accessToken);
         return toolTextResult(JSON.stringify(projects, null, 2));
@@ -690,17 +781,22 @@ export class CollascoMcpServer {
 
   private async handleResourceRead(params: Record<string, unknown> | undefined): Promise<unknown> {
     const uri = requiredString(params?.uri, 'resource uri');
-    if (uri !== GENERAL_INSTRUCTIONS_RESOURCE_URI) {
+    let resource: unknown;
+
+    if (uri === GENERAL_INSTRUCTIONS_RESOURCE_URI) {
+      resource = await this.apiClient.getGeneralInstructions();
+    } else if (uri === DOCUMENTATION_CATALOG_RESOURCE_URI) {
+      resource = await this.apiClient.getDocumentationCatalog();
+    } else {
       throw new McpError(-32602, `Unknown resource: ${uri}`);
     }
 
-    const instructions = await this.apiClient.getGeneralInstructions();
     return {
       contents: [
         {
           uri,
           mimeType: 'application/json',
-          text: JSON.stringify(instructions, null, 2),
+          text: JSON.stringify(resource, null, 2),
         },
       ],
     };
@@ -858,8 +954,18 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       },
     },
     {
+      name: 'collasco_get_standard_documentation_catalog',
+      description:
+        'Get the shared Collasco standard documentation label catalog manual for choosing or suggesting documentation labels.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
       name: 'collasco_list_projects',
-      description: 'List the projects that belong to the authenticated user.',
+      description:
+        'List authenticated user projects. When q is omitted, the MCP server falls back to the user profile project summary to avoid the unstable unfiltered API listing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1099,6 +1205,13 @@ function resourceDefinitions() {
       name: 'Collasco general instructions',
       description:
         'Shared Collasco project-root manual filtered to the Instructions label, used as the canonical operating guide for agents.',
+      mimeType: 'application/json',
+    },
+    {
+      uri: DOCUMENTATION_CATALOG_RESOURCE_URI,
+      name: 'Collasco standard documentation label catalog',
+      description:
+        'Shared manual with the standard Collasco documentation label catalog, used by agents to choose or suggest labels when project labels do not fit well.',
       mimeType: 'application/json',
     },
   ];

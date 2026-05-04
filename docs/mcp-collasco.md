@@ -16,7 +16,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - supports `Authorization: Bearer <access_token>` for HTTP MCP requests
 - supports a local-only refresh-token bridge when started with `npm run mcp:collasco:http:login`
 - forwards the bearer access token to the Collasco API
-- retrieves projects through `GET /v1/projects/mine`
+- retrieves projects through `GET /v1/projects/mine` when filtered, with a profile-based fallback for unfiltered listings
 - creates modules and features through the existing Collasco REST API
 - exposes OAuth protected-resource metadata for future hosted use
 
@@ -26,6 +26,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - `collasco_search_projects`
 - `collasco_get_project`
 - `collasco_get_general_instructions`
+- `collasco_get_standard_documentation_catalog`
 - `collasco_get_project_labels`
 - `collasco_get_project_documentation`
 - `collasco_get_module_documentation`
@@ -38,10 +39,13 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - `collasco_delete_feature`
 - `collasco_update_documentation`
 
+`collasco_list_projects` accepts optional `q`. When `q` is omitted, the MCP server falls back to `GET /users/me/profile` and builds the project list from owned and member projects, avoiding the unstable unfiltered `/projects/mine` path.
+
 ## Tool Intent
 
 - `collasco_get_project`: retrieves the project record, such as name, status, visibility, description, and other project metadata.
 - `collasco_get_general_instructions`: retrieves the shared Collasco `Instructions` manual used as the canonical operating guide for agents.
+- `collasco_get_standard_documentation_catalog`: retrieves the shared Collasco standard documentation label catalog manual used by agents to choose or suggest labels when project labels do not fit well.
 - `collasco_get_project_labels`: retrieves the full project label definitions, including instructions, visibility roles, read-only roles, and ordering.
 - `collasco_get_project_documentation`: retrieves project-level documentation entries from the documentation API.
 - `collasco_get_module_documentation`: retrieves module-level documentation entries from the documentation API.
@@ -57,8 +61,11 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 ## Available Resources
 
 - `collasco://instructions/general`: the shared Collasco project-root manual filtered to the `Instructions` label, returned as JSON. This resource is backed by the shared manual link for the Collasco project, so agents can read the general Collasco instructions through MCP without requiring direct access to the private Collasco project.
+- `collasco://documentation/standard-label-catalog`: the shared Collasco standard documentation label catalog manual, returned as JSON. This resource helps agents choose or suggest documentation labels when the current project labels do not fit well.
 
 By default the MCP server reads shared manual `06045779-2a7a-4415-a9f4-3df75b95ac6e`. Override this with `COLLASCO_GENERAL_INSTRUCTIONS_SHARED_LINK_ID` when a different shared instructions manual should be exposed.
+
+By default the MCP server reads documentation catalog shared manual `4fd19cab-cfee-4aba-81a8-828904c44104`. Override this with `COLLASCO_DOCUMENTATION_CATALOG_SHARED_LINK_ID` when a different shared catalog manual should be exposed.
 
 ## Build And Start
 
