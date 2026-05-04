@@ -8,6 +8,12 @@ Private npm package for running the Collasco MCP server.
 npm install -g @collasco/mcp-server
 ```
 
+From a tarball:
+
+```bash
+npm install -g ./collasco-mcp-server-0.1.0.tgz
+```
+
 For one-off use without a global install:
 
 ```bash
@@ -35,6 +41,15 @@ Register it in Codex:
 ```bash
 codex mcp add collasco --url http://127.0.0.1:3333/mcp
 ```
+
+Register it in Claude Code:
+
+```bash
+claude mcp add-json collasco '{"type":"http","url":"http://127.0.0.1:3333/mcp"}'
+claude mcp get collasco
+```
+
+Claude Desktop remote connectors are reached from Anthropic's cloud infrastructure, so `localhost` is not a valid remote connector target. For Claude Desktop local distribution, package this server as a Desktop Extension (`.dxt`) or use a local development MCP configuration that starts the server on the user's machine.
 
 ## Configuration
 

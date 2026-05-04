@@ -85,13 +85,7 @@ http://localhost:3333/mcp
 
 Opening `http://localhost:3333/` or `http://localhost:3333/mcp` with a browser or `curl` returns a small discovery response. MCP clients should still connect to `/mcp` and send JSON-RPC requests with `POST`.
 
-Register it with Codex as streamable HTTP MCP:
-
-```bash
-codex mcp add collasco --url http://127.0.0.1:3333/mcp --bearer-token-env-var COLLASCO_ACCESS_TOKEN
-```
-
-This stores only the environment variable name, not the token value. With the login startup script below, the MCP server can also authenticate requests through its local refresh-token bridge, so Codex does not need to store a token in its config.
+See "Client setup" below for configuring MCP clients.
 
 For local development, the easiest startup path is:
 
@@ -141,7 +135,7 @@ cd packages/collasco-mcp-server
 npm publish
 ```
 
-Colleagues can install and start it with:
+Developers can install and start it with:
 
 ```bash
 npm install -g @collasco/mcp-server
@@ -159,6 +153,59 @@ Then register the local HTTP MCP endpoint in Codex:
 ```bash
 codex mcp add collasco --url http://127.0.0.1:3333/mcp
 ```
+
+## Tarball distribution
+
+For developers who should not receive npm organization access, build a tarball:
+
+```bash
+cd packages/collasco-mcp-server
+npm pack
+```
+
+This creates a file like:
+
+```text
+collasco-mcp-server-0.1.0.tgz
+```
+
+External developers can install it with:
+
+```bash
+npm install -g ./collasco-mcp-server-0.1.0.tgz
+collasco-mcp-login
+```
+
+The `collasco-mcp-login` terminal process must stay open while the MCP client uses the local server.
+
+## Client setup
+
+First start the local MCP server:
+
+```bash
+collasco-mcp-login
+```
+
+The command prompts for Collasco credentials and starts:
+
+```text
+http://127.0.0.1:3333/mcp
+```
+
+Codex:
+
+```bash
+codex mcp add collasco --url http://127.0.0.1:3333/mcp
+```
+
+Claude Code:
+
+```bash
+claude mcp add-json collasco '{"type":"http","url":"http://127.0.0.1:3333/mcp"}'
+claude mcp get collasco
+```
+
+Claude Desktop remote connectors are configured through Claude's connector UI and are reached from Anthropic's cloud infrastructure, so `localhost` is not a valid remote connector target. For Claude Desktop local distribution, package this server as a Desktop Extension (`.dxt`) or use a local development MCP configuration that starts the server on the user's machine.
 
 ## Authentication
 
