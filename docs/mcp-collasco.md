@@ -168,13 +168,13 @@ npm pack
 This creates a file like:
 
 ```text
-collasco-mcp-server-0.1.0.tgz
+collasco-mcp-server-0.1.2.tgz
 ```
 
 External developers can install it with:
 
 ```bash
-npm install -g ./collasco-mcp-server-0.1.0.tgz
+npm install -g ./collasco-mcp-server-0.1.2.tgz
 collasco-mcp-login
 ```
 

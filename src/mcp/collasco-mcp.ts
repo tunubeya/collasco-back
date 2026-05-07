@@ -621,7 +621,7 @@ export class CollascoMcpServer {
             },
             serverInfo: {
               name: 'collasco-mcp',
-              version: '0.1.0',
+              version: '0.1.2',
             },
           });
           return;
@@ -1002,7 +1002,7 @@ function initializeResult() {
     },
     serverInfo: {
       name: 'collasco-mcp',
-      version: '0.1.0',
+      version: '0.1.2',
     },
   };
 }

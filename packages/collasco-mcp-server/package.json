@@ -1,6 +1,6 @@
 {
   "name": "@collasco/mcp-server",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Collasco MCP server for local and hosted MCP clients.",
   "license": "UNLICENSED",
   "type": "commonjs",
