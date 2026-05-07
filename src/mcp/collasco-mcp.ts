@@ -478,9 +478,11 @@ export class CollascoApiClient {
       headers?: Record<string, string>;
     },
   ): Promise<unknown> {
-    const response = await fetch(
-      new URL(stripLeadingSlashes(path), withTrailingSlash(this.apiBaseUrl)),
-      {
+    const url = new URL(stripLeadingSlashes(path), withTrailingSlash(this.apiBaseUrl));
+    let response: Response;
+
+    try {
+      response = await fetch(url, {
         method: init.method,
         headers: {
           Accept: 'application/json',
@@ -488,10 +490,38 @@ export class CollascoApiClient {
           ...init.headers,
         },
         body: init.body ? JSON.stringify(init.body) : undefined,
-      },
-    );
+      });
+    } catch (error) {
+      logErrorToStderr('Collasco API request failed before receiving a response.', {
+        method: init.method,
+        url: url.toString(),
+        error,
+      });
+      throw new McpError(
+        -32000,
+        `Could not connect to the Collasco API at ${url.toString()}.`,
+        serializeErrorForClient(error),
+      );
+    }
 
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      logErrorToStderr('Collasco API response body could not be read.', {
+        method: init.method,
+        url: url.toString(),
+        status: response.status,
+        statusText: response.statusText,
+        error,
+      });
+      throw new McpError(
+        -32000,
+        `Could not read Collasco API response with status ${response.status}.`,
+        serializeErrorForClient(error),
+      );
+    }
+
     const payload = text ? safeJsonParse(text) : null;
 
     if (!response.ok) {
@@ -499,6 +529,14 @@ export class CollascoApiClient {
         extractErrorMessage(payload) ??
         response.statusText ??
         `Collasco API request failed with status ${response.status}`;
+      logErrorToStderr('Collasco API returned an error response.', {
+        method: init.method,
+        url: url.toString(),
+        status: response.status,
+        statusText: response.statusText,
+        message,
+        responseBody: payload ?? text,
+      });
       throw new McpError(response.status, message, payload ?? text);
     }
 
@@ -813,6 +851,11 @@ export class CollascoHttpMcpServer {
   start(): void {
     const server = createServer((req, res) => {
       this.handleRequest(req, res).catch((error) => {
+        logErrorToStderr('Unhandled Collasco MCP HTTP request error.', {
+          method: req.method,
+          url: req.url,
+          error,
+        });
         sendJson(res, 500, {
           error: error instanceof Error ? error.message : 'Unknown error',
         });
@@ -1238,6 +1281,69 @@ function jsonRpcError(id: JsonRpcId, error: unknown): JsonRpcResponse {
     id,
     error: rpcError,
   };
+}
+
+function logErrorToStderr(message: string, details: Record<string, unknown> = {}): void {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level: 'error',
+    component: 'collasco-mcp',
+    message,
+    details: redactForLog(details),
+  };
+
+  try {
+    process.stderr.write(`${JSON.stringify(entry)}\n`);
+  } catch {
+    // Logging must never interfere with MCP responses.
+  }
+}
+
+function serializeErrorForClient(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+    };
+  }
+
+  return {
+    message: String(error),
+  };
+}
+
+function redactForLog(value: unknown): unknown {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactForLog(item));
+  }
+
+  if (!isRecord(value)) {
+    return limitLogValue(value);
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => [
+      key,
+      isSensitiveLogKey(key) ? '[REDACTED]' : redactForLog(entryValue),
+    ]),
+  );
+}
+
+function isSensitiveLogKey(key: string): boolean {
+  return /authorization|password|token|secret|cookie|set-cookie/i.test(key);
+}
+
+function limitLogValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  return value.length > 2000 ? `${value.slice(0, 2000)}...[truncated]` : value;
 }
 
 function toolTextResult(text: string) {
