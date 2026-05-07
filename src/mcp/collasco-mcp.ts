@@ -55,6 +55,8 @@ type CollascoApiClientOptions = {
 const JSON_RPC_VERSION = '2.0';
 const DEFAULT_API_BASE_URL = 'https://api.collasco.com/v1';
 const MCP_PROTOCOL_VERSION = '2024-11-05';
+const MCP_SERVER_NAME = 'collasco-mcp';
+const MCP_SERVER_VERSION = '0.1.3';
 const DEFAULT_HTTP_PORT = 3333;
 const DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID = '06045779-2a7a-4415-a9f4-3df75b95ac6e';
 const DEFAULT_DOCUMENTATION_CATALOG_SHARED_LINK_ID = '4fd19cab-cfee-4aba-81a8-828904c44104';
@@ -569,6 +571,8 @@ export class CollascoMcpServer {
     process.env.COLLASCO_MCP_ENABLE_PASSWORD_LOGIN === 'true';
 
   start(): void {
+    logActivityToStderr(`Collasco MCP server ${MCP_SERVER_VERSION} starting on stdio.`);
+
     this.stdin.on('data', (chunk: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
       this.flushBuffer().catch((error) => this.writeError(null, error));
@@ -620,8 +624,8 @@ export class CollascoMcpServer {
               resources: {},
             },
             serverInfo: {
-              name: 'collasco-mcp',
-              version: '0.1.2',
+              name: MCP_SERVER_NAME,
+              version: MCP_SERVER_VERSION,
             },
           });
           return;
@@ -884,7 +888,7 @@ export class CollascoHttpMcpServer {
 
     server.listen(this.port, this.host, () => {
       process.stderr.write(
-        `Collasco MCP HTTP server listening on http://${this.host}:${this.port}/mcp\n`,
+        `Collasco MCP HTTP server ${MCP_SERVER_VERSION} listening on http://${this.host}:${this.port}/mcp\n`,
       );
     });
   }
@@ -1001,8 +1005,8 @@ function initializeResult() {
       resources: {},
     },
     serverInfo: {
-      name: 'collasco-mcp',
-      version: '0.1.2',
+      name: MCP_SERVER_NAME,
+      version: MCP_SERVER_VERSION,
     },
   };
 }
