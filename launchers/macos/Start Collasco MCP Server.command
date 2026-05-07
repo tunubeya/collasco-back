@@ -24,9 +24,9 @@ fi
 cd "$BACKEND_DIR" || exit 1
 npm run mcp:collasco:http:login
 
-status=$?
+exit_status=$?
 echo
-echo "Collasco MCP Server exited with status $status."
+echo "Collasco MCP Server exited with status $exit_status."
 echo "Press any key to close this window."
 read -k 1
-exit "$status"
+exit "$exit_status"
