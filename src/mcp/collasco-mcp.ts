@@ -175,7 +175,9 @@ export class CollascoApiClient {
       });
     }
 
-    const allItems = Array.from(uniqueProjects.values()).sort((a, b) => a.name.localeCompare(b.name));
+    const allItems = Array.from(uniqueProjects.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
     const safePage = Math.max(page ?? 1, 1);
     const safeLimit = Math.min(Math.max(limit ?? 20, 1), 100);
     const start = (safePage - 1) * safeLimit;
@@ -192,6 +194,11 @@ export class CollascoApiClient {
   async getProject(projectId?: string, accessToken?: string): Promise<unknown> {
     const resolvedProjectId = requiredString(projectId, 'projectId');
     return this.authenticatedRequest(`/projects/${resolvedProjectId}`, accessToken);
+  }
+
+  async getProjectStructure(projectId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedProjectId = requiredString(projectId, 'projectId');
+    return this.authenticatedRequest(`/projects/${resolvedProjectId}/structure`, accessToken);
   }
 
   async getProjectLabels(projectId?: string, accessToken?: string): Promise<unknown> {
@@ -702,6 +709,13 @@ export class CollascoMcpServer {
         );
         return toolTextResult(JSON.stringify(project, null, 2));
       }
+      case 'collasco_get_project_structure': {
+        const structure = await this.apiClient.getProjectStructure(
+          asOptionalString(args?.projectId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(structure, null, 2));
+      }
       case 'collasco_get_project_labels': {
         const labels = await this.apiClient.getProjectLabels(
           asOptionalString(args?.projectId),
@@ -1038,6 +1052,17 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
     {
       name: 'collasco_get_project',
       description: 'Get one Collasco project by its id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project UUID.' },
+        },
+        required: ['projectId'],
+      },
+    },
+    {
+      name: 'collasco_get_project_structure',
+      description: 'Get the module and feature tree for a Collasco project.',
       inputSchema: {
         type: 'object',
         properties: {

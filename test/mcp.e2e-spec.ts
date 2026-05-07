@@ -28,6 +28,17 @@ type ProjectListResult = {
   }>;
 };
 
+type ProjectStructureResult = {
+  projectId: string;
+  modules: Array<{
+    type: 'module';
+    id: string;
+    name: string;
+    parentModuleId: string | null;
+    items?: Array<unknown>;
+  }>;
+};
+
 type ProjectLabelResult = Array<{
   id: string;
   name: string;
@@ -209,6 +220,7 @@ describe('Collasco MCP HTTP server (e2e)', () => {
         'collasco_list_projects',
         'collasco_search_projects',
         'collasco_get_project',
+        'collasco_get_project_structure',
         'collasco_get_general_instructions',
         'collasco_get_standard_documentation_catalog',
         'collasco_get_project_labels',
@@ -252,6 +264,22 @@ describe('Collasco MCP HTTP server (e2e)', () => {
     const names = (result.items ?? []).map((project) => project.name);
 
     expect(names).toContain(E2E_PROJECT_NAME);
+  });
+
+  it('tool: collasco_get_project_structure - returns the module and feature tree for a project', async () => {
+    const projectList = await callTool<ProjectListResult>('collasco_search_projects', {
+      q: E2E_PROJECT_NAME,
+    });
+    const project = (projectList.items ?? []).find((entry) => entry.name === E2E_PROJECT_NAME);
+
+    expect(project).toBeDefined();
+
+    const structure = await callTool<ProjectStructureResult>('collasco_get_project_structure', {
+      projectId: project?.id,
+    });
+
+    expect(structure.projectId).toBe(project?.id);
+    expect(Array.isArray(structure.modules)).toBe(true);
   });
 
   it('tool: collasco_get_project_labels - returns the Overview label with instructions containing why and what', async () => {

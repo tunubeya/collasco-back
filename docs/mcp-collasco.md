@@ -25,6 +25,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 - `collasco_list_projects`
 - `collasco_search_projects`
 - `collasco_get_project`
+- `collasco_get_project_structure`
 - `collasco_get_general_instructions`
 - `collasco_get_standard_documentation_catalog`
 - `collasco_get_project_labels`
@@ -44,6 +45,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 ## Tool Intent
 
 - `collasco_get_project`: retrieves the project record, such as name, status, visibility, description, and other project metadata.
+- `collasco_get_project_structure`: retrieves the module and feature tree for a project through `GET /projects/:projectId/structure`.
 - `collasco_get_general_instructions`: retrieves the shared Collasco `Instructions` manual used as the canonical operating guide for agents.
 - `collasco_get_standard_documentation_catalog`: retrieves the shared Collasco standard documentation label catalog manual used by agents to choose or suggest labels when project labels do not fit well.
 - `collasco_get_project_labels`: retrieves the full project label definitions, including instructions, visibility roles, read-only roles, and ordering.
@@ -290,6 +292,7 @@ npm run test:mcp:e2e
 - `tools/list`: verifies the expected Collasco MCP tools are exposed
 - `collasco_list_projects`: finds the `Collasco Automated E2E Testsuite` project through the project listing flow
 - `collasco_search_projects`: finds the `Collasco Automated E2E Testsuite` project when searching by name
+- `collasco_get_project_structure`: returns the module and feature tree for the `Collasco Automated E2E Testsuite` project
 - `collasco_get_project_labels`: returns the `Overview` label and verifies that its instructions contain `why` and `what`
 - `collasco_get_project_documentation`: returns project-level documentation entries for the `Collasco Automated E2E Testsuite` project
 - module/feature CRUD and documentation update: creates, updates, documents, and deletes E2E module/feature records in the `Collasco Automated E2E Testsuite` project
