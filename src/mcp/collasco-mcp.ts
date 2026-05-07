@@ -443,6 +443,7 @@ export class CollascoApiClient {
         method: init.method ?? 'GET',
         body: init.body,
         headers: this.accessHeaders(resolvedAccessToken),
+        suppressErrorLogForStatuses: this.canRefreshAccessToken() ? [401] : undefined,
       });
     } catch (error) {
       if (!(error instanceof McpError) || error.code !== 401 || !this.canRefreshAccessToken()) {
@@ -483,6 +484,7 @@ export class CollascoApiClient {
       method: HttpMethod;
       body?: unknown;
       headers?: Record<string, string>;
+      suppressErrorLogForStatuses?: number[];
     },
   ): Promise<unknown> {
     const url = new URL(stripLeadingSlashes(path), withTrailingSlash(this.apiBaseUrl));
@@ -536,14 +538,16 @@ export class CollascoApiClient {
         extractErrorMessage(payload) ??
         response.statusText ??
         `Collasco API request failed with status ${response.status}`;
-      logErrorToStderr('Collasco API returned an error response.', {
-        method: init.method,
-        url: url.toString(),
-        status: response.status,
-        statusText: response.statusText,
-        message,
-        responseBody: payload ?? text,
-      });
+      if (!init.suppressErrorLogForStatuses?.includes(response.status)) {
+        logErrorToStderr('Collasco API returned an error response.', {
+          method: init.method,
+          url: url.toString(),
+          status: response.status,
+          statusText: response.statusText,
+          message,
+          responseBody: payload ?? text,
+        });
+      }
       throw new McpError(response.status, message, payload ?? text);
     }
 
