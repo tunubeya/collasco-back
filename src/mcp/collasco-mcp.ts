@@ -649,6 +649,7 @@ export class CollascoMcpServer {
   ): Promise<unknown> {
     const name = requiredString(params?.name, 'tool name');
     const args = isRecord(params?.arguments) ? params?.arguments : undefined;
+    logActivityToStderr('Tool call.', { tool: name });
 
     switch (name) {
       case 'collasco_login': {
@@ -821,6 +822,7 @@ export class CollascoMcpServer {
 
   private async handleResourceRead(params: Record<string, unknown> | undefined): Promise<unknown> {
     const uri = requiredString(params?.uri, 'resource uri');
+    logActivityToStderr('Resource read.', { uri });
     let resource: unknown;
 
     if (uri === GENERAL_INSTRUCTIONS_RESOURCE_URI) {
@@ -1283,20 +1285,56 @@ function jsonRpcError(id: JsonRpcId, error: unknown): JsonRpcResponse {
   };
 }
 
+function logActivityToStderr(message: string, details: Record<string, unknown> = {}): void {
+  writeLogLineToStderr(formatActivityLogMessage(message, details));
+}
+
 function logErrorToStderr(message: string, details: Record<string, unknown> = {}): void {
-  const entry = {
-    timestamp: new Date().toISOString(),
+  writeLogToStderr({
     level: 'error',
-    component: 'collasco-mcp',
     message,
     details: redactForLog(details),
-  };
+  });
+}
 
+function writeLogToStderr(entry: Record<string, unknown>): void {
+  writeLogLineToStderr(
+    JSON.stringify({
+      component: 'collasco-mcp',
+      ...entry,
+    }),
+  );
+}
+
+function writeLogLineToStderr(message: string): void {
   try {
-    process.stderr.write(`${JSON.stringify(entry)}\n`);
+    process.stderr.write(`${formatLogTimestamp(new Date())} ${message}\n`);
   } catch {
     // Logging must never interfere with MCP responses.
   }
+}
+
+function formatActivityLogMessage(message: string, details: Record<string, unknown>): string {
+  const tool = asOptionalString(details.tool);
+  if (tool) return `Tool call: ${tool}`;
+
+  const uri = asOptionalString(details.uri);
+  if (uri) return `Resource read: ${uri}`;
+
+  return message.replace(/\.$/, '');
+}
+
+function formatLogTimestamp(date: Date): string {
+  const year = date.getFullYear();
+  const month = padDatePart(date.getMonth() + 1);
+  const day = padDatePart(date.getDate());
+  const hours = padDatePart(date.getHours());
+  const minutes = padDatePart(date.getMinutes());
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+function padDatePart(value: number): string {
+  return String(value).padStart(2, '0');
 }
 
 function serializeErrorForClient(error: unknown): Record<string, unknown> {
