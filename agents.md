@@ -16,8 +16,12 @@ When the user asks to create a GitHub issue for Collasco, write the issue in Eng
 
 Use `tunubeya/collasco-back` as the default repository unless the user names another repository.
 
+When creating or editing issue bodies with `gh`, use real multiline Markdown. Do not pass escaped `\n` sequences that render literally in GitHub.
+
 If the user describes the issue as a bug story, format it with a `## Bug story` section using "As a ..., I want ..., so that ...", followed by problem, expected behavior, actual behavior, reproduction steps, and acceptance criteria.
 
-Bug stories must receive the `bug` label.
+Bug issues and bug stories must receive the `bug` label.
 
-Add new Collasco issues to GitHub Project `Collasco`: `https://github.com/users/tunubeya/projects/2/views/1`. Set the project `Status` field to `Todo` unless the user asks for another status.
+Add new Collasco issues to GitHub Project `Collasco`: `https://github.com/users/tunubeya/projects/2/views/1`. Bug issues must be added to the project and put in the `Todo` status column unless the user asks for another status.
+
+After creating a Collasco issue, verify that it appears in the `Collasco` project with the expected `Status` value before reporting it as done.
