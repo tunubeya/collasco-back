@@ -1070,7 +1070,8 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
     },
     {
       name: 'collasco_get_project_structure',
-      description: 'Get the module and feature tree for a Collasco project.',
+      description:
+        'Get the module and feature tree for navigation only. For questions about documentation, do not rely on the structure view; fetch documentation with the project, module, or feature documentation tools.',
       inputSchema: {
         type: 'object',
         properties: {

@@ -45,7 +45,7 @@ For local development the MCP server can run on localhost. Later the same HTTP t
 ## Tool Intent
 
 - `collasco_get_project`: retrieves the project record, such as name, status, visibility, description, and other project metadata.
-- `collasco_get_project_structure`: retrieves the module and feature tree for a project through `GET /projects/:projectId/structure`.
+- `collasco_get_project_structure`: retrieves the module and feature tree for a project through `GET /projects/:projectId/structure`. Use this structure view for navigation only; for questions about documentation, fetch documentation with `collasco_get_project_documentation`, `collasco_get_module_documentation`, or `collasco_get_feature_documentation`.
 - `collasco_get_general_instructions`: retrieves the shared Collasco `Instructions` manual used as the canonical operating guide for agents.
 - `collasco_get_standard_documentation_catalog`: retrieves the shared Collasco standard documentation label catalog manual used by agents to choose or suggest labels when project labels do not fit well.
 - `collasco_get_project_labels`: retrieves the full project label definitions, including instructions, visibility roles, read-only roles, and ordering.
