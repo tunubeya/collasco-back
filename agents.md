@@ -14,7 +14,7 @@ Never mutate live Collasco project contents unless the user explicitly names the
 
 When the user asks to create a GitHub issue for Collasco, write the issue in English.
 
-Use `tunubeya/collasco-back` as the default repository unless the user names another repository.
+Create Collasco GitHub issues in `tunubeya/qms-front` unless the user explicitly names another repository.
 
 When creating or editing issue bodies with `gh`, use real multiline Markdown. Do not pass escaped `\n` sequences that render literally in GitHub.
 
@@ -22,6 +22,8 @@ If the user describes the issue as a bug story, format it with a `## Bug story` 
 
 Bug issues and bug stories must receive the `bug` label.
 
-Add new Collasco issues to GitHub Project `Collasco`: `https://github.com/users/tunubeya/projects/2/views/1`. Bug issues must be added to the project and put in the `Todo` status column unless the user asks for another status.
+Small change issues must receive the `Small change` label. When the user describes a ticket as a small change, create it in `tunubeya/qms-front`, add it to the Collasco project, and put it directly in the `Todo` status column unless the user asks for another status.
+
+Add new Collasco issues to GitHub Project `Collasco`: `https://github.com/users/tunubeya/projects/2/views/1`. Bug issues and small change issues must be added to the project and put in the `Todo` status column unless the user asks for another status.
 
 After creating a Collasco issue, verify that it appears in the `Collasco` project with the expected `Status` value before reporting it as done.
