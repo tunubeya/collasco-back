@@ -354,7 +354,7 @@ export class TicketsService {
       }
     }
 
-    return this.prisma.ticket.update({
+    const updatedTicket = await this.prisma.ticket.update({
       where: { id },
       data: {
         title: dto.title,
@@ -364,6 +364,15 @@ export class TicketsService {
         version: { increment: 1 },
       },
     });
+
+    // Update read receipt for the user who made the change
+    await this.prisma.ticketReadReceipt.upsert({
+      where: { userId_ticketId: { ticketId: id, userId: user.sub } },
+      create: { ticketId: id, userId: user.sub, lastSeenVersion: updatedTicket.version },
+      update: { lastSeenVersion: updatedTicket.version },
+    });
+
+    return updatedTicket;
   }
 
   async addSection(ticketId: string, dto: CreateTicketSectionDto, user: AccessTokenPayload) {
@@ -410,6 +419,19 @@ export class TicketsService {
       where: { id: ticketId },
       data: { updatedAt: new Date(), version: { increment: 1 } },
     });
+
+    // Update read receipt for the user who made the change
+    const updatedTicket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { version: true },
+    });
+    if (updatedTicket) {
+      await this.prisma.ticketReadReceipt.upsert({
+        where: { userId_ticketId: { ticketId, userId: user.sub } },
+        create: { ticketId: ticketId, userId: user.sub, lastSeenVersion: updatedTicket.version },
+        update: { lastSeenVersion: updatedTicket.version },
+      });
+    }
 
     if (ticket.publicReporterEmail && ticket.followUpToken) {
       this.emailService
