@@ -211,6 +211,15 @@ describe('Collasco MCP HTTP server (e2e)', () => {
     const result = await rpcResult<{
       tools?: Array<{
         name: string;
+        inputSchema?: {
+          properties?: Record<
+            string,
+            {
+              type?: string | string[];
+              enum?: unknown[];
+            }
+          >;
+        };
       }>;
     }>('tools/list');
     const toolNames = (result.tools ?? []).map((tool) => tool.name);
@@ -236,6 +245,12 @@ describe('Collasco MCP HTTP server (e2e)', () => {
         'collasco_update_documentation',
       ]),
     );
+
+    const updateFeatureTool = result.tools?.find((tool) => tool.name === 'collasco_update_feature');
+    const prioritySchema = updateFeatureTool?.inputSchema?.properties?.priority;
+
+    expect(prioritySchema?.type).toEqual(['string', 'null']);
+    expect(prioritySchema?.enum).toEqual(['LOW', 'MEDIUM', 'HIGH', null]);
   });
 
   it('lists the Collasco shared instruction resources', async () => {
@@ -384,6 +399,13 @@ describe('Collasco MCP HTTP server (e2e)', () => {
       expect(updatedFeature.name).toBe(`MCP E2E Feature ${suffix} Updated`);
       expect(updatedFeature.priority).toBe('HIGH');
       expect(updatedFeature.status).toBe('IN_PROGRESS');
+
+      const nullPriorityFeature = await callTool<CreatedFeatureResult>('collasco_update_feature', {
+        featureId: feature.id,
+        priority: null,
+      });
+
+      expect(nullPriorityFeature.priority).toBeNull();
 
       const moduleDocumentation = await callTool<ProjectDocumentationResult>(
         'collasco_update_documentation',

@@ -56,7 +56,7 @@ const JSON_RPC_VERSION = '2.0';
 const DEFAULT_API_BASE_URL = 'https://api.collasco.com/v1';
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const MCP_SERVER_NAME = 'collasco-mcp';
-const MCP_SERVER_VERSION = '0.1.4';
+const MCP_SERVER_VERSION = '0.1.5';
 const DEFAULT_HTTP_PORT = 3333;
 const DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID = '06045779-2a7a-4415-a9f4-3df75b95ac6e';
 const DEFAULT_DOCUMENTATION_CATALOG_SHARED_LINK_ID = '4fd19cab-cfee-4aba-81a8-828904c44104';
@@ -326,7 +326,7 @@ export class CollascoApiClient {
     const body = compactObject({
       name: asOptionalString(args?.name),
       description: asOptionalString(args?.description),
-      priority: asOptionalString(args?.priority),
+      priority: asOptionalNullableString(args?.priority),
       status: asOptionalString(args?.status),
       moduleId: asOptionalString(args?.moduleId),
     });
@@ -1150,8 +1150,8 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
           name: { type: 'string', description: 'Feature name.' },
           description: { type: 'string', description: 'Optional feature description.' },
           priority: {
-            type: 'string',
-            enum: ['LOW', 'MEDIUM', 'HIGH'],
+            type: ['string', 'null'],
+            enum: ['LOW', 'MEDIUM', 'HIGH', null],
             description: 'Optional feature priority.',
           },
           status: {
@@ -1189,8 +1189,8 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
           name: { type: 'string', description: 'Optional new feature name.' },
           description: { type: 'string', description: 'Optional new feature description.' },
           priority: {
-            type: 'string',
-            enum: ['LOW', 'MEDIUM', 'HIGH'],
+            type: ['string', 'null'],
+            enum: ['LOW', 'MEDIUM', 'HIGH', null],
             description: 'Optional feature priority.',
           },
           status: {
@@ -1598,6 +1598,11 @@ function requiredString(value: unknown, label: string): string {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function asOptionalNullableString(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  return asOptionalString(value);
 }
 
 function asOptionalNumber(value: unknown): number | undefined {

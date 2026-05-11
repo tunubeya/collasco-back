@@ -11,7 +11,7 @@ npm install -g @collasco/mcp-server
 From a tarball:
 
 ```bash
-npm install -g ./collasco-mcp-server-0.1.4.tgz
+npm install -g ./collasco-mcp-server-0.1.5.tgz
 ```
 
 For one-off use without a global install:
