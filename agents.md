@@ -10,6 +10,8 @@ Before working with Collasco content, read the shared `Instructions` manual for 
 
 Never mutate live Collasco project contents unless the user explicitly names the target project and asks for a mutation. Automated MCP tests and exploratory write calls use the `Collasco Automated E2E Testsuite` project.
 
+Each time a new version of the Collasco MCP server is created, update feature `a1d3abfd-8f35-4203-8d7e-a3c3f695da3d` with the new version number. This update is pre-authorized and does not require additional explicit permission.
+
 ## GitHub issues
 
 When the user asks to create a GitHub issue for Collasco, write the issue in English.
