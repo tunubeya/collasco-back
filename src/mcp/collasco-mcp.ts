@@ -56,7 +56,7 @@ const JSON_RPC_VERSION = '2.0';
 const DEFAULT_API_BASE_URL = 'https://api.collasco.com/v1';
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const MCP_SERVER_NAME = 'collasco-mcp';
-const MCP_SERVER_VERSION = '0.1.5';
+const MCP_SERVER_VERSION = '0.1.6';
 const DEFAULT_HTTP_PORT = 3333;
 const DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID = '06045779-2a7a-4415-a9f4-3df75b95ac6e';
 const DEFAULT_DOCUMENTATION_CATALOG_SHARED_LINK_ID = '4fd19cab-cfee-4aba-81a8-828904c44104';
@@ -664,7 +664,8 @@ export class CollascoMcpServer {
   ): Promise<unknown> {
     const name = requiredString(params?.name, 'tool name');
     const args = isRecord(params?.arguments) ? params?.arguments : undefined;
-    logActivityToStderr('Tool call.', { tool: name });
+    const projectContext = requiredProjectLogContext(name, args);
+    logActivityToStderr('Tool call.', this.toolCallLogDetails(name, projectContext));
 
     switch (name) {
       case 'collasco_login': {
@@ -783,6 +784,19 @@ export class CollascoMcpServer {
       default:
         throw new McpError(-32601, `Unknown tool: ${name}`);
     }
+  }
+
+  private toolCallLogDetails(
+    tool: string,
+    projectContext: ProjectLogContext | undefined,
+  ): Record<string, unknown> {
+    if (!projectContext) return { tool };
+
+    return compactObject({
+      tool,
+      projectId: projectContext.projectId,
+      projectName: projectContext.projectName,
+    });
   }
 
   async handleHttpMessage(
@@ -1012,6 +1026,11 @@ function initializeResult() {
 }
 
 function toolDefinitions(includePasswordLoginTool: boolean) {
+  const projectContextSchemaProperties = {
+    projectId: { type: 'string', description: 'Project UUID for logging context.' },
+    projectName: { type: 'string', description: 'Project name for logging context.' },
+  };
+
   const tools = [
     {
       name: 'collasco_get_general_instructions',
@@ -1063,9 +1082,9 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
-          projectId: { type: 'string', description: 'Project UUID.' },
+          ...projectContextSchemaProperties,
         },
-        required: ['projectId'],
+        required: ['projectId', 'projectName'],
       },
     },
     {
@@ -1075,9 +1094,9 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
-          projectId: { type: 'string', description: 'Project UUID.' },
+          ...projectContextSchemaProperties,
         },
-        required: ['projectId'],
+        required: ['projectId', 'projectName'],
       },
     },
     {
@@ -1087,9 +1106,9 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
-          projectId: { type: 'string', description: 'Project UUID.' },
+          ...projectContextSchemaProperties,
         },
-        required: ['projectId'],
+        required: ['projectId', 'projectName'],
       },
     },
     {
@@ -1098,9 +1117,9 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
-          projectId: { type: 'string', description: 'Project UUID.' },
+          ...projectContextSchemaProperties,
         },
-        required: ['projectId'],
+        required: ['projectId', 'projectName'],
       },
     },
     {
@@ -1109,9 +1128,10 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
+          ...projectContextSchemaProperties,
           moduleId: { type: 'string', description: 'Module UUID.' },
         },
-        required: ['moduleId'],
+        required: ['projectId', 'projectName', 'moduleId'],
       },
     },
     {
@@ -1120,9 +1140,10 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
+          ...projectContextSchemaProperties,
           featureId: { type: 'string', description: 'Feature UUID.' },
         },
-        required: ['featureId'],
+        required: ['projectId', 'projectName', 'featureId'],
       },
     },
     {
@@ -1131,13 +1152,13 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
-          projectId: { type: 'string', description: 'Project UUID.' },
+          ...projectContextSchemaProperties,
           name: { type: 'string', description: 'Module name.' },
           description: { type: 'string', description: 'Optional module description.' },
           parentModuleId: { type: 'string', description: 'Optional parent module UUID.' },
           isRoot: { type: 'boolean', description: 'Whether this module is a root module.' },
         },
-        required: ['projectId', 'name'],
+        required: ['projectId', 'projectName', 'name'],
       },
     },
     {
@@ -1146,6 +1167,7 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
+          ...projectContextSchemaProperties,
           moduleId: { type: 'string', description: 'Module UUID.' },
           name: { type: 'string', description: 'Feature name.' },
           description: { type: 'string', description: 'Optional feature description.' },
@@ -1160,7 +1182,7 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
             description: 'Optional feature status.',
           },
         },
-        required: ['moduleId', 'name'],
+        required: ['projectId', 'projectName', 'moduleId', 'name'],
       },
     },
     {
@@ -1169,13 +1191,14 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
+          ...projectContextSchemaProperties,
           moduleId: { type: 'string', description: 'Module UUID.' },
           name: { type: 'string', description: 'Optional new module name.' },
           description: { type: 'string', description: 'Optional new module description.' },
           parentModuleId: { type: 'string', description: 'Optional new parent module UUID.' },
           isRoot: { type: 'boolean', description: 'Optional root-module flag.' },
         },
-        required: ['moduleId'],
+        required: ['projectId', 'projectName', 'moduleId'],
       },
     },
     {
@@ -1184,6 +1207,7 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
+          ...projectContextSchemaProperties,
           featureId: { type: 'string', description: 'Feature UUID.' },
           moduleId: { type: 'string', description: 'Optional target module UUID.' },
           name: { type: 'string', description: 'Optional new feature name.' },
@@ -1199,7 +1223,7 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
             description: 'Optional feature status.',
           },
         },
-        required: ['featureId'],
+        required: ['projectId', 'projectName', 'featureId'],
       },
     },
     {
@@ -1208,6 +1232,7 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
+          ...projectContextSchemaProperties,
           moduleId: { type: 'string', description: 'Module UUID.' },
           cascade: {
             type: 'boolean',
@@ -1218,7 +1243,7 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
             description: 'Whether to delete even when published versions exist.',
           },
         },
-        required: ['moduleId'],
+        required: ['projectId', 'projectName', 'moduleId'],
       },
     },
     {
@@ -1227,13 +1252,14 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
+          ...projectContextSchemaProperties,
           featureId: { type: 'string', description: 'Feature UUID.' },
           force: {
             type: 'boolean',
             description: 'Whether to delete even when a published version exists.',
           },
         },
-        required: ['featureId'],
+        required: ['projectId', 'projectName', 'featureId'],
       },
     },
     {
@@ -1242,6 +1268,7 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
       inputSchema: {
         type: 'object',
         properties: {
+          ...projectContextSchemaProperties,
           entityType: {
             type: 'string',
             enum: ['project', 'module', 'feature'],
@@ -1255,7 +1282,7 @@ function toolDefinitions(includePasswordLoginTool: boolean) {
             description: 'Optional not-applicable flag for this documentation field.',
           },
         },
-        required: ['entityType', 'entityId', 'labelId'],
+        required: ['projectId', 'projectName', 'entityType', 'entityId', 'labelId'],
       },
     },
   ];
@@ -1350,12 +1377,58 @@ function writeLogLineToStderr(message: string): void {
 
 function formatActivityLogMessage(message: string, details: Record<string, unknown>): string {
   const tool = asOptionalString(details.tool);
-  if (tool) return `Tool call: ${tool}`;
+  if (tool) {
+    const projectId = asOptionalString(details.projectId);
+    const projectName = asOptionalString(details.projectName);
+    const project = projectId
+      ? ` project:${projectName ?? 'unknown'} / ${projectId}`
+      : '';
+    return `Tool call: ${tool}${project}`;
+  }
 
   const uri = asOptionalString(details.uri);
   if (uri) return `Resource read: ${uri}`;
 
   return message.replace(/\.$/, '');
+}
+
+type ProjectLogContext = {
+  projectId: string;
+  projectName: string;
+};
+
+function requiredProjectLogContext(
+  tool: string,
+  args: Record<string, unknown> | undefined,
+): ProjectLogContext | undefined {
+  if (!requiresProjectLogContext(tool)) return undefined;
+
+  return {
+    projectId: requiredString(args?.projectId, 'projectId'),
+    projectName: requiredString(args?.projectName, 'projectName'),
+  };
+}
+
+function requiresProjectLogContext(tool: string): boolean {
+  if (
+    tool === 'collasco_get_project' ||
+    tool === 'collasco_get_project_structure' ||
+    tool === 'collasco_get_project_labels' ||
+    tool === 'collasco_get_project_documentation' ||
+    tool === 'collasco_get_module_documentation' ||
+    tool === 'collasco_get_feature_documentation' ||
+    tool === 'collasco_create_module' ||
+    tool === 'collasco_create_feature' ||
+    tool === 'collasco_update_module' ||
+    tool === 'collasco_update_feature' ||
+    tool === 'collasco_delete_module' ||
+    tool === 'collasco_delete_feature' ||
+    tool === 'collasco_update_documentation'
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function formatLogTimestamp(date: Date): string {
