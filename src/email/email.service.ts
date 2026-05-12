@@ -51,6 +51,31 @@ export class EmailService {
     }
   }
 
+  async sendPublicTicketCreatedEmail(
+    to: string,
+    reporterName: string | null,
+    projectName: string,
+    ticketTitle: string,
+    followUpToken: string,
+  ) {
+    const baseUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
+    const publicUrl = `${baseUrl}/public/tickets/follow/${followUpToken}`;
+
+    const subject = `Ticket created: ${ticketTitle} - ${projectName}`;
+    const nameSaludo = reporterName ? `Hi ${reporterName},` : 'Hello,';
+
+    const html = `
+      <h2>${projectName}</h2>
+      <p>${nameSaludo}</p>
+      <p>Your ticket has been created successfully.</p>
+      <p><strong>Ticket:</strong> ${ticketTitle}</p>
+      <p>You can follow up on your ticket by clicking the button below:</p>
+      <p><a href="${publicUrl}" style="display:inline-block;padding:12px 24px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;">View Ticket</a></p>
+      <p>Or copy this link: ${publicUrl}</p>
+    `;
+    return this.sendEmail(to, subject, html);
+  }
+
   async sendTicketNewSectionEmail(
     to: string,
     ticketTitle: string,
@@ -89,6 +114,32 @@ export class EmailService {
       `;
     }
 
+    return this.sendEmail(to, subject, html);
+  }
+
+  async sendTicketAssignedEmail(to: string, ticketTitle: string, ticketId: string) {
+    const baseUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
+    const internalUrl = `${baseUrl}/app/tickets/${ticketId}`;
+    const subject = `Ticket assigned: ${ticketTitle}`;
+    const html = `
+      <h2>You have been assigned to a ticket</h2>
+      <p>Ticket: <strong>${ticketTitle}</strong></p>
+      <p>You have been assigned to this ticket.</p>
+      <p><a href="${internalUrl}">View ticket</a></p>
+    `;
+    return this.sendEmail(to, subject, html);
+  }
+
+  async sendTicketCreatedEmail(to: string, ticketTitle: string, ticketId: string) {
+    const baseUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
+    const internalUrl = `${baseUrl}/app/tickets/${ticketId}`;
+    const subject = `New ticket created: ${ticketTitle}`;
+    const html = `
+      <h2>A new ticket has been created</h2>
+      <p>Ticket: <strong>${ticketTitle}</strong></p>
+      <p>A new ticket has been created and is awaiting assignment.</p>
+      <p><a href="${internalUrl}">View ticket</a></p>
+    `;
     return this.sendEmail(to, subject, html);
   }
 }

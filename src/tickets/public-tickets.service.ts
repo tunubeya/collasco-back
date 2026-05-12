@@ -90,7 +90,56 @@ export class PublicTicketsService {
           },
         },
       },
+      include: { project: { select: { name: true } } },
     });
+    this.emailService
+      .sendPublicTicketCreatedEmail(
+        dto.email.trim().toLowerCase(),
+        dto.name?.trim() || null,
+        ticket.project.name,
+        title,
+        followUpToken,
+      )
+      .then(() => {})
+      .catch((err) => console.error(`[createTicket] email failed:`, err));
+
+    // Add internal users with unassigned ticket preferences and send notifications
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId: linkInfo.projectId },
+      select: {
+        userId: true,
+        user: {
+          select: {
+            notifyUnassignedTickets: true,
+            emailUnassignedTickets: true,
+          },
+        },
+      },
+    });
+
+    const notifyUsersToAdd = members
+      .filter((m) => m.user.notifyUnassignedTickets)
+      .map((m) => ({ ticketId: ticket.id, userId: m.userId }));
+
+    const emailUsersToAdd = members
+      .filter((m) => m.user.emailUnassignedTickets)
+      .map((m) => ({ ticketId: ticket.id, userId: m.userId }));
+
+    if (notifyUsersToAdd.length > 0) {
+      await this.prisma.ticketNotifyUser.createMany({
+        data: notifyUsersToAdd,
+        skipDuplicates: true,
+      });
+    }
+    if (emailUsersToAdd.length > 0) {
+      await this.prisma.ticketEmailUser.createMany({
+        data: emailUsersToAdd,
+        skipDuplicates: true,
+      });
+    }
+
+    // Send notifications to users with unassigned ticket preferences
+    this.sendNewTicketNotification(ticket.id, title, linkInfo.projectId).catch(console.error);
 
     return {
       ticketId: ticket.id,
@@ -332,6 +381,45 @@ export class PublicTicketsService {
           ? { email: updated.author.email }
           : updated.author,
     };
+  }
+
+  private async sendNewTicketNotification(
+    ticketId: string,
+    ticketTitle: string,
+    projectId: string,
+  ) {
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId },
+      select: {
+        userId: true,
+        user: {
+          select: {
+            name: true,
+            email: true,
+            notifyUnassignedTickets: true,
+            emailUnassignedTickets: true,
+          },
+        },
+      },
+    });
+
+    for (const member of members) {
+      if (member.user.notifyUnassignedTickets) {
+        await this.prisma.notification.create({
+          data: {
+            userId: member.userId,
+            title: 'New ticket created',
+            message: `A new ticket "${ticketTitle}" has been created`,
+            type: 'INFO',
+            data: { ticketId, type: 'TICKET_CREATED' },
+          },
+        });
+      }
+
+      if (member.user.emailUnassignedTickets) {
+        void this.emailService.sendTicketCreatedEmail(member.user.email, ticketTitle, ticketId);
+      }
+    }
   }
 
   async updateTicket(followUpToken: string, dto: { title?: string }) {
