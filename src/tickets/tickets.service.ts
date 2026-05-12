@@ -58,7 +58,15 @@ export class TicketsService {
 
     const members = await this.prisma.projectMember.findMany({
       where: { projectId },
-      select: { userId: true, user: { select: { notifyUnassignedTickets: true, emailUnassignedTickets: true } } },
+      select: {
+        userId: true,
+        user: {
+          select: {
+            notifyUnassignedTickets: true,
+            emailUnassignedTickets: true,
+          },
+        },
+      },
     });
 
     const notifyUsersToAdd = members
@@ -70,11 +78,20 @@ export class TicketsService {
       .map((m) => ({ ticketId: ticket.id, userId: m.userId }));
 
     if (notifyUsersToAdd.length > 0) {
-      await this.prisma.ticketNotifyUser.createMany({ data: notifyUsersToAdd, skipDuplicates: true });
+      await this.prisma.ticketNotifyUser.createMany({
+        data: notifyUsersToAdd,
+        skipDuplicates: true,
+      });
     }
     if (emailUsersToAdd.length > 0) {
-      await this.prisma.ticketEmailUser.createMany({ data: emailUsersToAdd, skipDuplicates: true });
+      await this.prisma.ticketEmailUser.createMany({
+        data: emailUsersToAdd,
+        skipDuplicates: true,
+      });
     }
+
+    // Send notifications to users with unassigned ticket preferences
+    void this.sendNewTicketNotification(ticket.id);
 
     return this.findById(ticket.id, user);
   }
@@ -216,7 +233,7 @@ export class TicketsService {
       const oldAssigneeId = ticket.assigneeId;
       const newAssigneeId = dto.assigneeId;
       const projectId = ticket.projectId;
-      if (oldAssigneeId) {
+      if (oldAssigneeId && newAssigneeId) {
         await this.prisma.ticketNotifyUser.deleteMany({
           where: { ticketId: id, userId: oldAssigneeId },
         });
@@ -249,9 +266,8 @@ export class TicketsService {
             });
           }
         }
-      }
 
-      if (newAssigneeId) {
+        // Apply assigned defaults for new assignee
         const newAssigneePrefs = await this.prisma.user.findUnique({
           where: { id: newAssigneeId },
           select: { notifyAssignedTickets: true, emailAssignedTickets: true },
@@ -268,10 +284,77 @@ export class TicketsService {
             skipDuplicates: true,
           });
         }
+
+        // Send reassignment notification using preferences
+        void this.sendTicketAssignedNotification(id, newAssigneeId, 'reassigned');
+      } else if (oldAssigneeId && !newAssigneeId) {
+        // Assigned -> Unassigned
+        await this.prisma.ticketNotifyUser.deleteMany({
+          where: { ticketId: id, userId: oldAssigneeId },
+        });
+        await this.prisma.ticketEmailUser.deleteMany({
+          where: { ticketId: id, userId: oldAssigneeId },
+        });
+
+        // Use unassigned defaults for all project members
+        const members = await this.prisma.projectMember.findMany({
+          where: { projectId },
+          select: {
+            userId: true,
+            user: {
+              select: {
+                notifyUnassignedTickets: true,
+                emailUnassignedTickets: true,
+              },
+            },
+          },
+        });
+
+        const notifyUsersToAdd = members
+          .filter((m) => m.user.notifyUnassignedTickets)
+          .map((m) => ({ ticketId: id, userId: m.userId }));
+
+        const emailUsersToAdd = members
+          .filter((m) => m.user.emailUnassignedTickets)
+          .map((m) => ({ ticketId: id, userId: m.userId }));
+
+        if (notifyUsersToAdd.length > 0) {
+          await this.prisma.ticketNotifyUser.createMany({
+            data: notifyUsersToAdd,
+            skipDuplicates: true,
+          });
+        }
+        if (emailUsersToAdd.length > 0) {
+          await this.prisma.ticketEmailUser.createMany({
+            data: emailUsersToAdd,
+            skipDuplicates: true,
+          });
+        }
+      } else if (!oldAssigneeId && newAssigneeId) {
+        // Unassigned -> Assigned
+        // Use assigned defaults for the new assignee
+        const newAssigneePrefs = await this.prisma.user.findUnique({
+          where: { id: newAssigneeId },
+          select: { notifyAssignedTickets: true, emailAssignedTickets: true },
+        });
+        if (newAssigneePrefs?.notifyAssignedTickets) {
+          await this.prisma.ticketNotifyUser.createMany({
+            data: [{ ticketId: id, userId: newAssigneeId }],
+            skipDuplicates: true,
+          });
+        }
+        if (newAssigneePrefs?.emailAssignedTickets) {
+          await this.prisma.ticketEmailUser.createMany({
+            data: [{ ticketId: id, userId: newAssigneeId }],
+            skipDuplicates: true,
+          });
+        }
+        // Send assignment notification using preferences
+        this.sendTicketAssignedNotification(id, newAssigneeId, 'assigned').catch(console.error);
       }
     }
 
-    return this.prisma.ticket.update({
+    const updatedTicket = await this.prisma.ticket.update({
       where: { id },
       data: {
         title: dto.title,
@@ -281,6 +364,15 @@ export class TicketsService {
         version: { increment: 1 },
       },
     });
+
+    // Update read receipt for the user who made the change
+    await this.prisma.ticketReadReceipt.upsert({
+      where: { userId_ticketId: { ticketId: id, userId: user.sub } },
+      create: { ticketId: id, userId: user.sub, lastSeenVersion: updatedTicket.version },
+      update: { lastSeenVersion: updatedTicket.version },
+    });
+
+    return updatedTicket;
   }
 
   async addSection(ticketId: string, dto: CreateTicketSectionDto, user: AccessTokenPayload) {
@@ -328,6 +420,19 @@ export class TicketsService {
       data: { updatedAt: new Date(), version: { increment: 1 } },
     });
 
+    // Update read receipt for the user who made the change
+    const updatedTicket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { version: true },
+    });
+    if (updatedTicket) {
+      await this.prisma.ticketReadReceipt.upsert({
+        where: { userId_ticketId: { ticketId, userId: user.sub } },
+        create: { ticketId: ticketId, userId: user.sub, lastSeenVersion: updatedTicket.version },
+        update: { lastSeenVersion: updatedTicket.version },
+      });
+    }
+
     if (ticket.publicReporterEmail && ticket.followUpToken) {
       this.emailService
         .sendTicketNewSectionEmail(ticket.publicReporterEmail, ticket.title, ticket.followUpToken)
@@ -370,12 +475,106 @@ export class TicketsService {
     const emailRecipients = users.emailUsers.filter((u) => u.userId !== authorId);
 
     for (const recipient of emailRecipients) {
-      this.emailService.sendTicketNewSectionEmail(
+      void this.emailService.sendTicketNewSectionEmail(
         recipient.email,
         ticket?.title || '',
         null,
         ticketId,
       );
+    }
+  }
+
+  private async sendTicketAssignedNotification(
+    ticketId: string,
+    userId: string,
+    type: 'assigned' | 'reassigned',
+  ) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { title: true },
+    });
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true, email: true },
+    });
+
+    if (!ticket || !user) return;
+
+    const notifyRecord = await this.prisma.ticketNotifyUser.findUnique({
+      where: { ticketId_userId: { ticketId, userId } },
+    });
+
+    if (notifyRecord) {
+      await this.prisma.notification.create({
+        data: {
+          userId,
+          title: type === 'reassigned' ? 'Ticket reassigned' : 'Ticket assigned',
+          message:
+            type === 'reassigned'
+              ? `You have been reassigned to "${ticket.title}"`
+              : `You have been assigned to "${ticket.title}"`,
+          type: 'INFO',
+          data: {
+            ticketId,
+            type: type === 'reassigned' ? 'TICKET_REASSIGNED' : 'TICKET_ASSIGNED',
+          },
+        },
+      });
+    }
+
+    const emailRecord = await this.prisma.ticketEmailUser.findUnique({
+      where: { ticketId_userId: { ticketId, userId } },
+    });
+
+    if (emailRecord) {
+      void this.emailService.sendTicketAssignedEmail(user.email, ticket.title, ticketId);
+    }
+  }
+
+  private async sendNewTicketNotification(ticketId: string) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { title: true, projectId: true },
+    });
+
+    if (!ticket) return;
+
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId: ticket.projectId },
+      select: {
+        userId: true,
+        user: {
+          select: {
+            name: true,
+            email: true,
+            notifyUnassignedTickets: true,
+            emailUnassignedTickets: true,
+          },
+        },
+      },
+    });
+
+    for (const member of members) {
+      if (member.user.notifyUnassignedTickets) {
+        await this.prisma.notification.create({
+          data: {
+            userId: member.userId,
+            title: 'New ticket created',
+            message: `A new ticket "${ticket.title}" has been created`,
+            type: 'INFO',
+            data: { ticketId, type: 'TICKET_CREATED' },
+          },
+        });
+      }
+
+      if (member.user.emailUnassignedTickets) {
+        void this.emailService.sendTicketCreatedEmail(
+          member.user.email,
+          ticket.title,
+          ticketId,
+        );
+      }
     }
   }
 
@@ -542,6 +741,12 @@ export class TicketsService {
 
     if (projectId) {
       where.projectId = projectId;
+    } else if (scope !== TicketScope.ALL && scope !== TicketScope.EXTERNAL) {
+      const memberProjects = await this.prisma.projectMember.findMany({
+        where: { userId: user.sub },
+        select: { projectId: true },
+      });
+      where.projectId = { in: memberProjects.map((m) => m.projectId) };
     }
 
     if (scope === TicketScope.MINE) {
@@ -552,26 +757,7 @@ export class TicketsService {
       where.assigneeId = null;
     } else if (scope === TicketScope.RESOLVED) {
       where.status = TicketStatus.RESOLVED;
-    } else if (scope === TicketScope.ALL) {
-      if (projectId) {
-        const hasPermission = await hasProjectPermission(
-          this.prisma,
-          user.sub,
-          projectId,
-          PERMISSION_KEYS.TICKET_READ_ALL,
-        );
-        if (!hasPermission) {
-          where.createdById = user.sub;
-        }
-      } else {
-        const memberProjects = await this.prisma.projectMember.findMany({
-          where: { userId: user.sub },
-          select: { projectId: true },
-        });
-        where.projectId = { in: memberProjects.map((m) => m.projectId) };
-      }
     } else if (scope === TicketScope.EXTERNAL) {
-      // Tickets externos (creados por usuarios externos via público)
       where.NOT = { publicReporterEmail: null };
     }
 
@@ -619,7 +805,6 @@ export class TicketsService {
   }
 
   async getCounts(userId: string, projectId?: string) {
-    const projectFilter = projectId ? { projectId } : { projectId: { in: [] as string[] } };
     const myProjects = projectId
       ? [projectId]
       : (
@@ -633,9 +818,9 @@ export class TicketsService {
       return { counts: { all: 0, mine: 0, assigned: 0, unassigned: 0, resolved: 0, external: 0 } };
     }
 
-    const whereBase = projectId ? { projectId } : { projectId: { in: myProjects } };
-
     const activeStatus = { in: [TicketStatus.OPEN, TicketStatus.PENDING] };
+
+    const whereBase = projectId ? { projectId } : { projectId: { in: myProjects } };
 
     const [all, mine, assigned, unassigned, resolved, external] = await Promise.all([
       this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus } }),
@@ -643,7 +828,7 @@ export class TicketsService {
       this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, assigneeId: userId } }),
       this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, assigneeId: null } }),
       this.prisma.ticket.count({ where: { ...whereBase, status: TicketStatus.RESOLVED } }),
-      this.prisma.ticket.count({ where: { ...whereBase, NOT: { publicReporterEmail: null } } }),
+      this.prisma.ticket.count({ where: { ...whereBase, NOT: { publicReporterEmail: null }}}),
     ]);
     return { counts: { all, mine, assigned, unassigned, resolved, external } };
   }

@@ -229,6 +229,7 @@ export class ModulesService {
     parentModuleId: string | null,
     currentOrder: number,
     direction: MoveDirection,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<OrderNeighbor | null> {
     const orderFilter =
       direction === MoveDirection.UP ? { lt: currentOrder } : { gt: currentOrder };
@@ -242,14 +243,14 @@ export class ModulesService {
       deletedAt: null,
     };
 
-    const moduleNeighborPromise = this.prisma.module.findFirst({
+    const moduleNeighborPromise = client.module.findFirst({
       where: moduleWhere,
       orderBy,
       select: { id: true, sortOrder: true },
     });
 
     const featureNeighborPromise = parentModuleId
-      ? this.prisma.feature.findFirst({
+      ? client.feature.findFirst({
           where: { moduleId: parentModuleId, sortOrder: orderFilter, deletedAt: null },
           orderBy,
           select: { id: true, sortOrder: true },
@@ -277,6 +278,76 @@ export class ModulesService {
       });
     }
     return this.pickNeighbor(direction, candidates);
+  }
+
+  private async normalizeSiblingOrder(
+    projectId: string,
+    parentModuleId: string | null,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ) {
+    const modules = await client.module.findMany({
+      where: { projectId, parentModuleId, deletedAt: null },
+      select: { id: true, sortOrder: true, createdAt: true },
+    });
+
+    if (!parentModuleId) {
+      const orderedModules = modules.sort((a, b) => {
+        const orderA = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+        const orderB = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+
+        const createdAtDiff = a.createdAt.getTime() - b.createdAt.getTime();
+        if (createdAtDiff !== 0) return createdAtDiff;
+        return a.id.localeCompare(b.id);
+      });
+
+      await Promise.all(
+        orderedModules.map((item, index) => {
+          if (item.sortOrder === index) return Promise.resolve();
+          return client.module.update({
+            where: { id: item.id },
+            data: { sortOrder: index },
+          });
+        }),
+      );
+      return;
+    }
+
+    const features = await client.feature.findMany({
+      where: { moduleId: parentModuleId, deletedAt: null },
+      select: { id: true, sortOrder: true, createdAt: true },
+    });
+
+    const orderedItems = [
+      ...modules.map((item) => ({ ...item, type: 'module' as const })),
+      ...features.map((item) => ({ ...item, type: 'feature' as const })),
+    ].sort((a, b) => {
+      const orderA = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const orderB = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (orderA !== orderB) return orderA - orderB;
+
+      const createdAtDiff = a.createdAt.getTime() - b.createdAt.getTime();
+      if (createdAtDiff !== 0) return createdAtDiff;
+
+      if (a.type !== b.type) return a.type === 'module' ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
+
+    await Promise.all(
+      orderedItems.map((item, index) => {
+        if (item.sortOrder === index) return Promise.resolve();
+        if (item.type === 'module') {
+          return client.module.update({
+            where: { id: item.id },
+            data: { sortOrder: index },
+          });
+        }
+        return client.feature.update({
+          where: { id: item.id },
+          data: { sortOrder: index },
+        });
+      }),
+    );
   }
 
   async getModuleStructure(user: AccessTokenPayload, moduleId: string) {
@@ -604,24 +675,33 @@ export class ModulesService {
 
   async moveOrder(user: AccessTokenPayload, moduleId: string, direction: MoveDirection) {
     const mod = await this.requireModule(user, moduleId, 'WRITE');
-    const currentOrder = mod.sortOrder ?? 0;
-    const neighbor = await this.findNeighborForModule(
-      moduleId,
-      mod.projectId,
-      mod.parentModuleId ?? null,
-      currentOrder,
-      direction,
-    );
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.normalizeSiblingOrder(mod.projectId, mod.parentModuleId ?? null, tx);
 
-    if (!neighbor) {
-      throw new BadRequestException('No hay elementos para intercambiar en esa dirección');
-    }
+      const currentModule = await tx.module.findFirst({
+        where: { id: moduleId, deletedAt: null },
+        select: { sortOrder: true },
+      });
+      if (!currentModule) throw new NotFoundException('Module not found');
 
-    const neighborOrder =
-      neighbor.sortOrder ??
-      (direction === MoveDirection.UP ? currentOrder - 1 : currentOrder + 1);
+      const currentOrder = currentModule.sortOrder ?? 0;
+      const neighbor = await this.findNeighborForModule(
+        moduleId,
+        mod.projectId,
+        mod.parentModuleId ?? null,
+        currentOrder,
+        direction,
+        tx,
+      );
 
-    await this.prisma.$transaction(async (tx) => {
+      if (!neighbor) {
+        throw new BadRequestException('No hay elementos para intercambiar en esa dirección');
+      }
+
+      const neighborOrder =
+        neighbor.sortOrder ??
+        (direction === MoveDirection.UP ? currentOrder - 1 : currentOrder + 1);
+
       await tx.module.update({
         where: { id: moduleId },
         data: { sortOrder: neighborOrder, lastModifiedById: user.sub },
@@ -638,10 +718,12 @@ export class ModulesService {
           data: { sortOrder: currentOrder, lastModifiedById: user.sub },
         });
       }
+
+      return { sortOrder: neighborOrder };
     });
 
     await this.touchModule(moduleId);
-    return { ok: true, moduleId, sortOrder: neighborOrder };
+    return { ok: true, moduleId, sortOrder: result.sortOrder };
   }
 
   // ===== Versionado =====
@@ -956,6 +1038,11 @@ export class ModulesService {
         where: { id: { in: allModuleIds }, deletedAt: { gte: cutoff } },
         data: { deletedAt: null, deletedById: null },
       });
+
+      await this.normalizeSiblingOrder(mod.projectId, mod.parentModuleId ?? null, tx);
+      for (const restoredModuleId of allModuleIds) {
+        await this.normalizeSiblingOrder(mod.projectId, restoredModuleId, tx);
+      }
     });
 
     await this.touchProject(mod.projectId);

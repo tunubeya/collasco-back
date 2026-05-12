@@ -2952,6 +2952,9 @@ export class QaService {
       const data: Prisma.DocumentationFieldUpdateInput = {};
       if (dto.content !== undefined) {
         data.content = dto.content;
+        if (dto.isNotApplicable === undefined) {
+          data.isNotApplicable = false;
+        }
       }
       if (dto.isNotApplicable !== undefined) {
         data.isNotApplicable = dto.isNotApplicable;

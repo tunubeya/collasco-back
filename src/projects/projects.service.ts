@@ -1210,7 +1210,7 @@ export class ProjectsService {
       include: { createdBy: { select: { id: true, name: true, email: true } } },
     });
 
-    const imagesByLabel = new Map<string, Array<{ id: string; name: string; url: string; createdAt: Date; createdBy: { id: string; name: string | null; email: string } | null }>>();
+    const imagesByLabel = new Map<string, Array<{ id: string; name: string; url: string; mimeType: string; size: number; createdAt: Date; createdBy: { id: string; name: string | null; email: string } | null }>>();
     for (const image of images) {
       if (!imagesByLabel.has(image.labelId)) {
         imagesByLabel.set(image.labelId, []);
@@ -1219,6 +1219,8 @@ export class ProjectsService {
         id: image.id,
         name: image.name,
         url: image.url,
+        mimeType: image.mimeType,
+        size: image.size,
         createdAt: image.createdAt,
         createdBy: image.createdBy ?? null,
       });

@@ -187,18 +187,19 @@ export class FeaturesService {
     moduleId: string,
     currentOrder: number,
     direction: MoveDirection,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<NeighborCandidate | null> {
     const orderFilter =
       direction === MoveDirection.UP ? { lt: currentOrder } : { gt: currentOrder };
     const orderBy = { sortOrder: direction === MoveDirection.UP ? 'desc' : 'asc' } as const;
 
     const [moduleNeighbor, featureNeighbor] = await Promise.all([
-      this.prisma.module.findFirst({
+      client.module.findFirst({
         where: { parentModuleId: moduleId, sortOrder: orderFilter, deletedAt: null },
         orderBy,
         select: { id: true, sortOrder: true },
       }),
-      this.prisma.feature.findFirst({
+      client.feature.findFirst({
         where: { moduleId, sortOrder: orderFilter, deletedAt: null },
         orderBy,
         select: { id: true, sortOrder: true },
@@ -221,6 +222,53 @@ export class FeaturesService {
       });
     }
     return this.pickNeighbor(direction, candidates);
+  }
+
+  private async normalizeModuleContentsOrder(
+    moduleId: string,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ) {
+    const [modules, features] = await Promise.all([
+      client.module.findMany({
+        where: { parentModuleId: moduleId, deletedAt: null },
+        select: { id: true, sortOrder: true, createdAt: true },
+      }),
+      client.feature.findMany({
+        where: { moduleId, deletedAt: null },
+        select: { id: true, sortOrder: true, createdAt: true },
+      }),
+    ]);
+
+    const orderedItems = [
+      ...modules.map((item) => ({ ...item, type: 'module' as const })),
+      ...features.map((item) => ({ ...item, type: 'feature' as const })),
+    ].sort((a, b) => {
+      const orderA = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const orderB = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (orderA !== orderB) return orderA - orderB;
+
+      const createdAtDiff = a.createdAt.getTime() - b.createdAt.getTime();
+      if (createdAtDiff !== 0) return createdAtDiff;
+
+      if (a.type !== b.type) return a.type === 'module' ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
+
+    await Promise.all(
+      orderedItems.map((item, index) => {
+        if (item.sortOrder === index) return Promise.resolve();
+        if (item.type === 'module') {
+          return client.module.update({
+            where: { id: item.id },
+            data: { sortOrder: index },
+          });
+        }
+        return client.feature.update({
+          where: { id: item.id },
+          data: { sortOrder: index },
+        });
+      }),
+    );
   }
 
   // ===== CRUD en módulo =====
@@ -381,17 +429,31 @@ export class FeaturesService {
 
   async moveOrder(user: AccessTokenPayload, featureId: string, direction: MoveDirection) {
     const feature = await this.requireFeature(user, featureId, 'WRITE');
-    const currentOrder = feature.sortOrder ?? 0;
-    const neighbor = await this.findNeighborInModule(feature.moduleId, currentOrder, direction);
-    if (!neighbor) {
-      throw new BadRequestException('No hay elementos para intercambiar en esa dirección');
-    }
 
-    const neighborOrder =
-      neighbor.sortOrder ??
-      (direction === MoveDirection.UP ? currentOrder - 1 : currentOrder + 1);
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.normalizeModuleContentsOrder(feature.moduleId, tx);
 
-    await this.prisma.$transaction(async (tx) => {
+      const currentFeature = await tx.feature.findFirst({
+        where: { id: featureId, deletedAt: null },
+        select: { id: true, sortOrder: true },
+      });
+      if (!currentFeature) throw new NotFoundException('Feature not found');
+
+      const currentOrder = currentFeature.sortOrder ?? 0;
+      const neighbor = await this.findNeighborInModule(
+        feature.moduleId,
+        currentOrder,
+        direction,
+        tx,
+      );
+      if (!neighbor) {
+        throw new BadRequestException('No hay elementos para intercambiar en esa dirección');
+      }
+
+      const neighborOrder =
+        neighbor.sortOrder ??
+        (direction === MoveDirection.UP ? currentOrder - 1 : currentOrder + 1);
+
       await tx.feature.update({
         where: { id: featureId },
         data: { sortOrder: neighborOrder, lastModifiedById: user.sub },
@@ -408,10 +470,12 @@ export class FeaturesService {
           data: { sortOrder: currentOrder, lastModifiedById: user.sub },
         });
       }
+
+      return { sortOrder: neighborOrder };
     });
 
     await this.touchFeature(featureId);
-    return { ok: true, featureId, sortOrder: neighborOrder };
+    return { ok: true, featureId, sortOrder: result.sortOrder };
   }
 
   // ===== Versionado (dedupe por contentHash) =====
