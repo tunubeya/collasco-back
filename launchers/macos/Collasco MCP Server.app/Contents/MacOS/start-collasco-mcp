@@ -1,0 +1,4 @@
+#!/bin/zsh
+
+SCRIPT_DIR="${0:A:h}"
+open -a Terminal "$SCRIPT_DIR/../Resources/start-server.command"

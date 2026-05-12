@@ -5,5 +5,6 @@ export interface AppEnv {
   JWT_SECRET: string;
   JWT_ACCESS_TTL: string;
   JWT_REFRESH_TTL: string;
+  PUBLIC_API_BASE_URL?: string | null;
   GITHUB_APP_TOKEN?: string | null;
 }

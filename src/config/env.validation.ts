@@ -9,6 +9,7 @@ export const envValidationSchema = Joi.object({
   JWT_SECRET: Joi.string().min(16).required(),
   JWT_ACCESS_TTL: Joi.string().default('15m'), // ej: 15m, 1h, 7d
   JWT_REFRESH_TTL: Joi.string().default('7d'),
+  PUBLIC_API_BASE_URL: Joi.string().uri().allow('').optional(),
 
   GITHUB_TOKEN: Joi.string().allow('').optional(),
   GITHUB_APP_TOKEN: Joi.string().allow('').optional(),

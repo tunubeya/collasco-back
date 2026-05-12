@@ -1,0 +1,1670 @@
+#!/usr/bin/env node
+
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+
+type JsonRpcId = string | number | null;
+
+type JsonRpcRequest = {
+  jsonrpc: '2.0';
+  id?: JsonRpcId;
+  method: string;
+  params?: Record<string, unknown>;
+};
+
+type JsonRpcResponse = {
+  jsonrpc: '2.0';
+  id: JsonRpcId;
+  result?: unknown;
+  error?: {
+    code: number;
+    message: string;
+    data?: unknown;
+  };
+};
+
+type AuthState = {
+  accessToken: string;
+  refreshToken: string;
+  accessTokenExpirationDate: string | null;
+  refreshTokenExpirationDate: string | null;
+  user: {
+    id: string;
+    email: string;
+    role: string;
+  };
+};
+
+type TokenSet = Pick<
+  AuthState,
+  'accessToken' | 'refreshToken' | 'accessTokenExpirationDate' | 'refreshTokenExpirationDate'
+>;
+
+type ToolCallArgs = Record<string, unknown> | undefined;
+
+type ToolCallContext = {
+  accessToken?: string;
+  includePasswordLoginTool: boolean;
+};
+
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+type CollascoApiClientOptions = {
+  allowPasswordLogin?: boolean;
+};
+
+const JSON_RPC_VERSION = '2.0';
+const DEFAULT_API_BASE_URL = 'https://api.collasco.com/v1';
+const MCP_PROTOCOL_VERSION = '2024-11-05';
+const MCP_SERVER_NAME = 'collasco-mcp';
+const MCP_SERVER_VERSION = '0.1.4';
+const DEFAULT_HTTP_PORT = 3333;
+const DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID = '06045779-2a7a-4415-a9f4-3df75b95ac6e';
+const DEFAULT_DOCUMENTATION_CATALOG_SHARED_LINK_ID = '4fd19cab-cfee-4aba-81a8-828904c44104';
+const GENERAL_INSTRUCTIONS_RESOURCE_URI = 'collasco://instructions/general';
+const DOCUMENTATION_CATALOG_RESOURCE_URI = 'collasco://documentation/standard-label-catalog';
+
+class McpError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+    readonly data?: unknown,
+  ) {
+    super(message);
+  }
+}
+
+export class CollascoApiClient {
+  private auth: AuthState | null = null;
+  private refreshedTokens: TokenSet | null = null;
+  private readonly allowPasswordLogin: boolean;
+
+  constructor(
+    private readonly apiBaseUrl: string,
+    options: CollascoApiClientOptions = {},
+  ) {
+    this.allowPasswordLogin = options.allowPasswordLogin ?? true;
+  }
+
+  async login(email?: string, password?: string): Promise<AuthState> {
+    if (!this.allowPasswordLogin) {
+      throw new McpError(
+        -32001,
+        'Password login is disabled. Use COLLASCO_ACCESS_TOKEN for local stdio or HTTP Authorization: Bearer <access_token>.',
+      );
+    }
+
+    const resolvedEmail = asOptionalString(email) ?? process.env.COLLASCO_EMAIL;
+    const resolvedPassword = asOptionalString(password) ?? process.env.COLLASCO_PASSWORD;
+
+    if (!resolvedEmail || !resolvedPassword) {
+      throw new McpError(
+        -32001,
+        'Missing credentials. Provide email/password to the login tool or set COLLASCO_EMAIL and COLLASCO_PASSWORD.',
+      );
+    }
+
+    const response = await this.request('/auth/login', {
+      method: 'POST',
+      body: {
+        email: resolvedEmail,
+        password: resolvedPassword,
+      },
+    });
+
+    this.auth = parseAuthState(response);
+    return this.auth;
+  }
+
+  async listProjects(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const params = new URLSearchParams();
+    const q = asOptionalString(args?.q);
+    const page = asOptionalNumber(args?.page);
+    const limit = asOptionalNumber(args?.limit);
+
+    if (!q) {
+      return this.listProjectsFromProfile(page, limit, accessToken);
+    }
+
+    if (q) params.set('q', q);
+    if (page !== undefined) params.set('page', String(page));
+    if (limit !== undefined) params.set('limit', String(limit));
+
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+
+    return this.authenticatedRequest(`/projects/mine${query}`, accessToken);
+  }
+
+  private async listProjectsFromProfile(
+    page: number | undefined,
+    limit: number | undefined,
+    accessToken?: string,
+  ): Promise<unknown> {
+    const profile = (await this.authenticatedRequest('/users/me/profile', accessToken)) as {
+      ownedProjects?: Array<{ id: string; name: string; slug?: string | null }>;
+      memberships?: Array<{
+        project?: { id: string; name: string; ownerId?: string | null } | null;
+      }>;
+    };
+
+    const uniqueProjects = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        slug: string | null;
+        hasAccess: boolean;
+      }
+    >();
+
+    for (const project of profile.ownedProjects ?? []) {
+      uniqueProjects.set(project.id, {
+        id: project.id,
+        name: project.name,
+        slug: project.slug ?? null,
+        hasAccess: true,
+      });
+    }
+
+    for (const membership of profile.memberships ?? []) {
+      const project = membership.project;
+      if (!project) continue;
+      const existing = uniqueProjects.get(project.id);
+      uniqueProjects.set(project.id, {
+        id: project.id,
+        name: project.name,
+        slug: existing?.slug ?? null,
+        hasAccess: true,
+      });
+    }
+
+    const allItems = Array.from(uniqueProjects.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    const safePage = Math.max(page ?? 1, 1);
+    const safeLimit = Math.min(Math.max(limit ?? 20, 1), 100);
+    const start = (safePage - 1) * safeLimit;
+    const items = allItems.slice(start, start + safeLimit);
+
+    return {
+      items,
+      total: allItems.length,
+      page: safePage,
+      limit: safeLimit,
+    };
+  }
+
+  async getProject(projectId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedProjectId = requiredString(projectId, 'projectId');
+    return this.authenticatedRequest(`/projects/${resolvedProjectId}`, accessToken);
+  }
+
+  async getProjectStructure(projectId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedProjectId = requiredString(projectId, 'projectId');
+    return this.authenticatedRequest(`/projects/${resolvedProjectId}/structure`, accessToken);
+  }
+
+  async getProjectLabels(projectId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedProjectId = requiredString(projectId, 'projectId');
+    return this.authenticatedRequest(`/qa/projects/${resolvedProjectId}/labels`, accessToken);
+  }
+
+  async getProjectDocumentation(projectId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedProjectId = requiredString(projectId, 'projectId');
+    return this.authenticatedRequest(
+      `/qa/projects/${resolvedProjectId}/documentation`,
+      accessToken,
+    );
+  }
+
+  async getModuleDocumentation(moduleId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedModuleId = requiredString(moduleId, 'moduleId');
+    return this.authenticatedRequest(`/qa/modules/${resolvedModuleId}/documentation`, accessToken);
+  }
+
+  async getFeatureDocumentation(featureId?: string, accessToken?: string): Promise<unknown> {
+    const resolvedFeatureId = requiredString(featureId, 'featureId');
+    return this.authenticatedRequest(
+      `/qa/features/${resolvedFeatureId}/documentation`,
+      accessToken,
+    );
+  }
+
+  async getGeneralInstructions(): Promise<unknown> {
+    const linkId =
+      process.env.COLLASCO_GENERAL_INSTRUCTIONS_SHARED_LINK_ID ||
+      DEFAULT_GENERAL_INSTRUCTIONS_SHARED_LINK_ID;
+    return this.getSharedManualResource({
+      resourceUri: GENERAL_INSTRUCTIONS_RESOURCE_URI,
+      labelName: 'Instructions',
+      sharedLinkId: linkId,
+    });
+  }
+
+  async getDocumentationCatalog(): Promise<unknown> {
+    const linkId =
+      process.env.COLLASCO_DOCUMENTATION_CATALOG_SHARED_LINK_ID ||
+      DEFAULT_DOCUMENTATION_CATALOG_SHARED_LINK_ID;
+    return this.getSharedManualResource({
+      resourceUri: DOCUMENTATION_CATALOG_RESOURCE_URI,
+      labelName: 'Standard Documentation Structure',
+      sharedLinkId: linkId,
+    });
+  }
+
+  private async getSharedManualResource(params: {
+    resourceUri: string;
+    labelName: string;
+    sharedLinkId: string;
+  }): Promise<unknown> {
+    const linkId = params.sharedLinkId;
+    const manualPath = `/public/manual/shared/${linkId}`;
+    const manual = await this.request(manualPath, { method: 'GET' });
+
+    return {
+      resourceUri: params.resourceUri,
+      sharedManualUrl: new URL(
+        `/public/manual/shared/${linkId}`,
+        process.env.COLLASCO_WEB_BASE_URL || 'https://collasco.com',
+      ).toString(),
+      publicApiUrl: new URL(
+        stripLeadingSlashes(manualPath),
+        withTrailingSlash(this.apiBaseUrl),
+      ).toString(),
+      labelName: params.labelName,
+      sharedLinkId: linkId,
+      manual,
+    };
+  }
+
+  async createModule(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const projectId = requiredString(args?.projectId, 'projectId');
+    const body = compactObject({
+      name: requiredString(args?.name, 'name'),
+      description: asOptionalString(args?.description),
+      parentModuleId: asOptionalString(args?.parentModuleId),
+      isRoot: asOptionalBoolean(args?.isRoot),
+    });
+
+    return this.authenticatedRequest(`/projects/${projectId}/modules`, accessToken, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async createFeature(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const moduleId = requiredString(args?.moduleId, 'moduleId');
+    const body = compactObject({
+      name: requiredString(args?.name, 'name'),
+      description: asOptionalString(args?.description),
+      priority: asOptionalString(args?.priority),
+      status: asOptionalString(args?.status),
+    });
+
+    return this.authenticatedRequest(`/modules/${moduleId}/features`, accessToken, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async updateModule(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const moduleId = requiredString(args?.moduleId, 'moduleId');
+    const body = compactObject({
+      name: asOptionalString(args?.name),
+      description: asOptionalString(args?.description),
+      parentModuleId: asOptionalString(args?.parentModuleId),
+      isRoot: asOptionalBoolean(args?.isRoot),
+    });
+
+    return this.authenticatedRequest(`/modules/${moduleId}`, accessToken, {
+      method: 'PATCH',
+      body,
+    });
+  }
+
+  async updateFeature(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const featureId = requiredString(args?.featureId, 'featureId');
+    const body = compactObject({
+      name: asOptionalString(args?.name),
+      description: asOptionalString(args?.description),
+      priority: asOptionalString(args?.priority),
+      status: asOptionalString(args?.status),
+      moduleId: asOptionalString(args?.moduleId),
+    });
+
+    return this.authenticatedRequest(`/features/${featureId}`, accessToken, {
+      method: 'PATCH',
+      body,
+    });
+  }
+
+  async deleteModule(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const moduleId = requiredString(args?.moduleId, 'moduleId');
+    const params = new URLSearchParams();
+    const cascade = asOptionalBoolean(args?.cascade);
+    const force = asOptionalBoolean(args?.force);
+    if (cascade !== undefined) params.set('cascade', String(cascade));
+    if (force !== undefined) params.set('force', String(force));
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+
+    return this.authenticatedRequest(`/modules/${moduleId}${query}`, accessToken, {
+      method: 'DELETE',
+    });
+  }
+
+  async deleteFeature(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const featureId = requiredString(args?.featureId, 'featureId');
+    const force = asOptionalBoolean(args?.force);
+    const query = force === undefined ? '' : `?force=${String(force)}`;
+
+    return this.authenticatedRequest(`/features/${featureId}${query}`, accessToken, {
+      method: 'DELETE',
+    });
+  }
+
+  async updateDocumentation(args: ToolCallArgs, accessToken?: string): Promise<unknown> {
+    const entityType = requiredDocumentationEntityType(args?.entityType);
+    const entityId = requiredString(args?.entityId, 'entityId');
+    const labelId = requiredString(args?.labelId, 'labelId');
+    const body = compactObject({
+      content: asOptionalString(args?.content),
+      isNotApplicable: asOptionalBoolean(args?.isNotApplicable),
+    });
+
+    return this.authenticatedRequest(
+      `/qa/${entityType}s/${entityId}/documentation/${labelId}`,
+      accessToken,
+      {
+        method: 'PUT',
+        body,
+      },
+    );
+  }
+
+  private async ensureAuthenticated(): Promise<void> {
+    if (this.auth) return;
+    await this.login();
+  }
+
+  private async refreshAccessToken(refreshToken?: string): Promise<TokenSet> {
+    const resolvedRefreshToken =
+      refreshToken ??
+      this.refreshedTokens?.refreshToken ??
+      this.auth?.refreshToken ??
+      process.env.COLLASCO_REFRESH_TOKEN;
+
+    if (!resolvedRefreshToken) {
+      throw new McpError(-32001, 'No refresh token available.');
+    }
+
+    const response = await this.request('/auth/refresh', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${resolvedRefreshToken}`,
+      },
+    });
+
+    const tokens = response as Partial<AuthState>;
+    const tokenSet = {
+      accessToken: requiredString(tokens.accessToken, 'refresh response accessToken'),
+      refreshToken: requiredString(tokens.refreshToken, 'refresh response refreshToken'),
+      accessTokenExpirationDate: asOptionalString(tokens.accessTokenExpirationDate) ?? null,
+      refreshTokenExpirationDate: asOptionalString(tokens.refreshTokenExpirationDate) ?? null,
+    };
+
+    if (this.auth) {
+      this.auth = {
+        ...this.auth,
+        ...tokenSet,
+      };
+    }
+
+    this.refreshedTokens = tokenSet;
+    return tokenSet;
+  }
+
+  private async authenticatedRequest(
+    path: string,
+    accessToken?: string,
+    init: {
+      method?: HttpMethod;
+      body?: unknown;
+    } = {},
+  ): Promise<unknown> {
+    let resolvedAccessToken =
+      this.refreshedTokens?.accessToken ?? accessToken ?? process.env.COLLASCO_ACCESS_TOKEN;
+    if (!resolvedAccessToken && process.env.COLLASCO_REFRESH_TOKEN) {
+      resolvedAccessToken = (await this.refreshAccessToken()).accessToken;
+    }
+
+    if (!resolvedAccessToken) {
+      await this.ensureAuthenticated();
+    }
+
+    try {
+      return await this.request(path, {
+        method: init.method ?? 'GET',
+        body: init.body,
+        headers: this.accessHeaders(resolvedAccessToken),
+        suppressErrorLogForStatuses: this.canRefreshAccessToken() ? [401] : undefined,
+      });
+    } catch (error) {
+      if (!(error instanceof McpError) || error.code !== 401 || !this.canRefreshAccessToken()) {
+        throw error;
+      }
+
+      const refreshedTokens = await this.refreshAccessToken();
+      return this.request(path, {
+        method: init.method ?? 'GET',
+        body: init.body,
+        headers: this.accessHeaders(refreshedTokens.accessToken),
+      });
+    }
+  }
+
+  private canRefreshAccessToken(): boolean {
+    return Boolean(
+      this.auth?.refreshToken ||
+        this.refreshedTokens?.refreshToken ||
+        process.env.COLLASCO_REFRESH_TOKEN,
+    );
+  }
+
+  private accessHeaders(accessToken?: string): Record<string, string> {
+    const resolvedAccessToken = accessToken ?? this.auth?.accessToken;
+    if (!resolvedAccessToken) {
+      throw new McpError(-32001, 'Not authenticated. Call login first.');
+    }
+
+    return {
+      Authorization: `Bearer ${resolvedAccessToken}`,
+    };
+  }
+
+  private async request(
+    path: string,
+    init: {
+      method: HttpMethod;
+      body?: unknown;
+      headers?: Record<string, string>;
+      suppressErrorLogForStatuses?: number[];
+    },
+  ): Promise<unknown> {
+    const url = new URL(stripLeadingSlashes(path), withTrailingSlash(this.apiBaseUrl));
+    let response: Response;
+
+    try {
+      response = await fetch(url, {
+        method: init.method,
+        headers: {
+          Accept: 'application/json',
+          ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+          ...init.headers,
+        },
+        body: init.body ? JSON.stringify(init.body) : undefined,
+      });
+    } catch (error) {
+      logErrorToStderr('Collasco API request failed before receiving a response.', {
+        method: init.method,
+        url: url.toString(),
+        error,
+      });
+      throw new McpError(
+        -32000,
+        `Could not connect to the Collasco API at ${url.toString()}.`,
+        serializeErrorForClient(error),
+      );
+    }
+
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      logErrorToStderr('Collasco API response body could not be read.', {
+        method: init.method,
+        url: url.toString(),
+        status: response.status,
+        statusText: response.statusText,
+        error,
+      });
+      throw new McpError(
+        -32000,
+        `Could not read Collasco API response with status ${response.status}.`,
+        serializeErrorForClient(error),
+      );
+    }
+
+    const payload = text ? safeJsonParse(text) : null;
+
+    if (!response.ok) {
+      const message =
+        extractErrorMessage(payload) ??
+        response.statusText ??
+        `Collasco API request failed with status ${response.status}`;
+      if (!init.suppressErrorLogForStatuses?.includes(response.status)) {
+        logErrorToStderr('Collasco API returned an error response.', {
+          method: init.method,
+          url: url.toString(),
+          status: response.status,
+          statusText: response.statusText,
+          message,
+          responseBody: payload ?? text,
+        });
+      }
+      throw new McpError(response.status, message, payload ?? text);
+    }
+
+    return payload;
+  }
+}
+
+export class CollascoMcpServer {
+  private readonly apiClient = new CollascoApiClient(
+    process.env.COLLASCO_API_BASE_URL || DEFAULT_API_BASE_URL,
+    {
+      allowPasswordLogin: process.env.COLLASCO_MCP_ENABLE_PASSWORD_LOGIN === 'true',
+    },
+  );
+  private readonly stdin = process.stdin;
+  private readonly stdout = process.stdout;
+  private buffer = Buffer.alloc(0);
+  private readonly includePasswordLoginTool =
+    process.env.COLLASCO_MCP_ENABLE_PASSWORD_LOGIN === 'true';
+
+  start(): void {
+    logActivityToStderr(`Collasco MCP server ${MCP_SERVER_VERSION} starting on stdio.`);
+
+    this.stdin.on('data', (chunk: Buffer) => {
+      this.buffer = Buffer.concat([this.buffer, chunk]);
+      this.flushBuffer().catch((error) => this.writeError(null, error));
+    });
+
+    this.stdin.on('end', () => {
+      process.exit(0);
+    });
+  }
+
+  private async flushBuffer(): Promise<void> {
+    while (true) {
+      const headerEnd = this.buffer.indexOf('\r\n\r\n');
+      if (headerEnd === -1) return;
+
+      const headerText = this.buffer.subarray(0, headerEnd).toString('utf8');
+      const contentLength = parseContentLength(headerText);
+      const messageStart = headerEnd + 4;
+      const messageEnd = messageStart + contentLength;
+
+      if (this.buffer.length < messageEnd) return;
+
+      const rawMessage = this.buffer.subarray(messageStart, messageEnd).toString('utf8');
+      this.buffer = this.buffer.subarray(messageEnd);
+
+      const request = safeJsonParse(rawMessage) as JsonRpcRequest;
+      await this.handleMessage(request);
+    }
+  }
+
+  private async handleMessage(request: JsonRpcRequest): Promise<void> {
+    if (!request || request.jsonrpc !== JSON_RPC_VERSION || !request.method) {
+      throw new McpError(-32600, 'Invalid JSON-RPC request.');
+    }
+
+    if (request.method === 'notifications/initialized') {
+      return;
+    }
+
+    const id = request.id ?? null;
+
+    try {
+      switch (request.method) {
+        case 'initialize':
+          this.writeResult(id, {
+            protocolVersion: MCP_PROTOCOL_VERSION,
+            capabilities: {
+              tools: {},
+              resources: {},
+            },
+            serverInfo: {
+              name: MCP_SERVER_NAME,
+              version: MCP_SERVER_VERSION,
+            },
+          });
+          return;
+        case 'tools/list':
+          this.writeResult(id, {
+            tools: toolDefinitions(this.includePasswordLoginTool),
+          });
+          return;
+        case 'resources/list':
+          this.writeResult(id, {
+            resources: resourceDefinitions(),
+          });
+          return;
+        case 'resources/read':
+          this.writeResult(id, await this.handleResourceRead(request.params));
+          return;
+        case 'tools/call':
+          this.writeResult(
+            id,
+            await this.handleToolCall(request.params, {
+              includePasswordLoginTool: this.includePasswordLoginTool,
+            }),
+          );
+          return;
+        default:
+          throw new McpError(-32601, `Method not found: ${request.method}`);
+      }
+    } catch (error) {
+      this.writeError(id, error);
+    }
+  }
+
+  async handleToolCall(
+    params: Record<string, unknown> | undefined,
+    context: ToolCallContext,
+  ): Promise<unknown> {
+    const name = requiredString(params?.name, 'tool name');
+    const args = isRecord(params?.arguments) ? params?.arguments : undefined;
+    logActivityToStderr('Tool call.', { tool: name });
+
+    switch (name) {
+      case 'collasco_login': {
+        if (!context.includePasswordLoginTool) {
+          throw new McpError(
+            -32601,
+            'Password login is disabled for this MCP server. Use OAuth Bearer token authentication.',
+          );
+        }
+
+        const auth = await this.apiClient.login(
+          asOptionalString(args?.email),
+          asOptionalString(args?.password),
+        );
+        return toolTextResult(
+          JSON.stringify(
+            {
+              ok: true,
+              user: auth.user,
+              accessTokenExpirationDate: auth.accessTokenExpirationDate,
+              refreshTokenExpirationDate: auth.refreshTokenExpirationDate,
+              apiBaseUrl: process.env.COLLASCO_API_BASE_URL || DEFAULT_API_BASE_URL,
+            },
+            null,
+            2,
+          ),
+        );
+      }
+      case 'collasco_get_general_instructions': {
+        const instructions = await this.apiClient.getGeneralInstructions();
+        return toolTextResult(JSON.stringify(instructions, null, 2));
+      }
+      case 'collasco_get_standard_documentation_catalog': {
+        const catalog = await this.apiClient.getDocumentationCatalog();
+        return toolTextResult(JSON.stringify(catalog, null, 2));
+      }
+      case 'collasco_list_projects': {
+        const projects = await this.apiClient.listProjects(args, context.accessToken);
+        return toolTextResult(JSON.stringify(projects, null, 2));
+      }
+      case 'collasco_search_projects': {
+        const q = requiredString(args?.q, 'q');
+        const projects = await this.apiClient.listProjects({ ...args, q }, context.accessToken);
+        return toolTextResult(JSON.stringify(projects, null, 2));
+      }
+      case 'collasco_get_project': {
+        const project = await this.apiClient.getProject(
+          asOptionalString(args?.projectId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(project, null, 2));
+      }
+      case 'collasco_get_project_structure': {
+        const structure = await this.apiClient.getProjectStructure(
+          asOptionalString(args?.projectId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(structure, null, 2));
+      }
+      case 'collasco_get_project_labels': {
+        const labels = await this.apiClient.getProjectLabels(
+          asOptionalString(args?.projectId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(labels, null, 2));
+      }
+      case 'collasco_get_project_documentation': {
+        const documentation = await this.apiClient.getProjectDocumentation(
+          asOptionalString(args?.projectId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(documentation, null, 2));
+      }
+      case 'collasco_get_module_documentation': {
+        const documentation = await this.apiClient.getModuleDocumentation(
+          asOptionalString(args?.moduleId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(documentation, null, 2));
+      }
+      case 'collasco_get_feature_documentation': {
+        const documentation = await this.apiClient.getFeatureDocumentation(
+          asOptionalString(args?.featureId),
+          context.accessToken,
+        );
+        return toolTextResult(JSON.stringify(documentation, null, 2));
+      }
+      case 'collasco_create_module': {
+        const module = await this.apiClient.createModule(args, context.accessToken);
+        return toolTextResult(JSON.stringify(module, null, 2));
+      }
+      case 'collasco_create_feature': {
+        const feature = await this.apiClient.createFeature(args, context.accessToken);
+        return toolTextResult(JSON.stringify(feature, null, 2));
+      }
+      case 'collasco_update_module': {
+        const module = await this.apiClient.updateModule(args, context.accessToken);
+        return toolTextResult(JSON.stringify(module, null, 2));
+      }
+      case 'collasco_update_feature': {
+        const feature = await this.apiClient.updateFeature(args, context.accessToken);
+        return toolTextResult(JSON.stringify(feature, null, 2));
+      }
+      case 'collasco_delete_module': {
+        const result = await this.apiClient.deleteModule(args, context.accessToken);
+        return toolTextResult(JSON.stringify(result, null, 2));
+      }
+      case 'collasco_delete_feature': {
+        const result = await this.apiClient.deleteFeature(args, context.accessToken);
+        return toolTextResult(JSON.stringify(result, null, 2));
+      }
+      case 'collasco_update_documentation': {
+        const documentation = await this.apiClient.updateDocumentation(args, context.accessToken);
+        return toolTextResult(JSON.stringify(documentation, null, 2));
+      }
+      default:
+        throw new McpError(-32601, `Unknown tool: ${name}`);
+    }
+  }
+
+  async handleHttpMessage(
+    request: JsonRpcRequest,
+    accessToken: string,
+  ): Promise<JsonRpcResponse | null> {
+    if (!request || request.jsonrpc !== JSON_RPC_VERSION || !request.method) {
+      return jsonRpcError(null, new McpError(-32600, 'Invalid JSON-RPC request.'));
+    }
+
+    if (request.method === 'notifications/initialized') {
+      return null;
+    }
+
+    const id = request.id ?? null;
+
+    try {
+      switch (request.method) {
+        case 'initialize':
+          return jsonRpcResult(id, initializeResult());
+        case 'tools/list':
+          return jsonRpcResult(id, {
+            tools: toolDefinitions(false),
+          });
+        case 'resources/list':
+          return jsonRpcResult(id, {
+            resources: resourceDefinitions(),
+          });
+        case 'resources/read':
+          return jsonRpcResult(id, await this.handleResourceRead(request.params));
+        case 'tools/call':
+          return jsonRpcResult(
+            id,
+            await this.handleToolCall(request.params, {
+              accessToken,
+              includePasswordLoginTool: false,
+            }),
+          );
+        default:
+          throw new McpError(-32601, `Method not found: ${request.method}`);
+      }
+    } catch (error) {
+      return jsonRpcError(id, error);
+    }
+  }
+
+  private writeResult(id: JsonRpcId, result: unknown): void {
+    this.writeMessage(jsonRpcResult(id, result));
+  }
+
+  private writeError(id: JsonRpcId, error: unknown): void {
+    this.writeMessage(jsonRpcError(id, error));
+  }
+
+  private writeMessage(message: JsonRpcResponse): void {
+    const body = JSON.stringify(message);
+    this.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+  }
+
+  private async handleResourceRead(params: Record<string, unknown> | undefined): Promise<unknown> {
+    const uri = requiredString(params?.uri, 'resource uri');
+    logActivityToStderr('Resource read.', { uri });
+    let resource: unknown;
+
+    if (uri === GENERAL_INSTRUCTIONS_RESOURCE_URI) {
+      resource = await this.apiClient.getGeneralInstructions();
+    } else if (uri === DOCUMENTATION_CATALOG_RESOURCE_URI) {
+      resource = await this.apiClient.getDocumentationCatalog();
+    } else {
+      throw new McpError(-32602, `Unknown resource: ${uri}`);
+    }
+
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify(resource, null, 2),
+        },
+      ],
+    };
+  }
+}
+
+export class CollascoHttpMcpServer {
+  private readonly mcpServer = new CollascoMcpServer();
+  private readonly port = asOptionalNumber(process.env.COLLASCO_MCP_HTTP_PORT) ?? DEFAULT_HTTP_PORT;
+  private readonly host = process.env.COLLASCO_MCP_HTTP_HOST || '127.0.0.1';
+
+  start(): void {
+    const server = createServer((req, res) => {
+      this.handleRequest(req, res).catch((error) => {
+        logErrorToStderr('Unhandled Collasco MCP HTTP request error.', {
+          method: req.method,
+          url: req.url,
+          error,
+        });
+        sendJson(res, 500, {
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      });
+    });
+
+    server.listen(this.port, this.host, () => {
+      process.stderr.write(
+        `Collasco MCP HTTP server ${MCP_SERVER_VERSION} listening on http://${this.host}:${this.port}/mcp\n`,
+      );
+    });
+  }
+
+  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method === 'OPTIONS') {
+      sendEmpty(res, 204, corsHeaders());
+      return;
+    }
+
+    const requestUrl = new URL(req.url ?? '/', this.publicBaseUrl());
+
+    if (req.method === 'GET' && requestUrl.pathname === '/.well-known/oauth-protected-resource') {
+      sendJson(res, 200, protectedResourceMetadata(this.publicMcpUrl()), corsHeaders());
+      return;
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/health') {
+      sendJson(res, 200, { ok: true }, corsHeaders());
+      return;
+    }
+
+    if (
+      req.method === 'GET' &&
+      requestUrl.pathname === '/mcp' &&
+      acceptsEventStream(req.headers.accept)
+    ) {
+      sendJson(
+        res,
+        405,
+        {
+          error: 'Method not allowed',
+          message: 'This MCP endpoint accepts JSON-RPC requests with POST /mcp.',
+        },
+        corsHeaders(),
+      );
+      return;
+    }
+
+    if (req.method === 'GET' && (requestUrl.pathname === '/' || requestUrl.pathname === '/mcp')) {
+      sendJson(res, 200, mcpDiscovery(this.publicMcpUrl()), corsHeaders());
+      return;
+    }
+
+    if (req.method !== 'POST' || requestUrl.pathname !== '/mcp') {
+      sendJson(res, 404, { error: 'Not found' }, corsHeaders());
+      return;
+    }
+
+    const accessToken = parseBearerToken(req.headers.authorization);
+    if (!accessToken && !this.allowsRefreshTokenAuth()) {
+      sendUnauthorized(res, this.publicMcpUrl());
+      return;
+    }
+
+    const rawBody = await readRequestBody(req);
+    const payload = safeJsonParse(rawBody);
+    if (!isRecord(payload)) {
+      sendJson(
+        res,
+        400,
+        jsonRpcError(null, new McpError(-32700, 'Invalid JSON body.')),
+        corsHeaders(),
+      );
+      return;
+    }
+
+    const response = await this.mcpServer.handleHttpMessage(
+      payload as JsonRpcRequest,
+      accessToken ?? '',
+    );
+    if (!response) {
+      sendEmpty(res, 202, corsHeaders());
+      return;
+    }
+
+    if (response.error?.code === 401) {
+      sendUnauthorized(res, this.publicMcpUrl(), response.error.message);
+      return;
+    }
+
+    if (response.error?.code === 403) {
+      sendJson(res, 403, response, corsHeaders());
+      return;
+    }
+
+    sendJson(res, 200, response, corsHeaders());
+  }
+
+  private publicBaseUrl(): string {
+    return process.env.COLLASCO_MCP_PUBLIC_BASE_URL || `http://localhost:${this.port}`;
+  }
+
+  private publicMcpUrl(): string {
+    return (
+      process.env.COLLASCO_MCP_PUBLIC_URL ||
+      new URL('/mcp', withTrailingSlash(this.publicBaseUrl())).toString()
+    );
+  }
+
+  private allowsRefreshTokenAuth(): boolean {
+    return (
+      process.env.COLLASCO_MCP_ALLOW_REFRESH_TOKEN_AUTH === 'true' &&
+      Boolean(process.env.COLLASCO_REFRESH_TOKEN)
+    );
+  }
+}
+
+function initializeResult() {
+  return {
+    protocolVersion: MCP_PROTOCOL_VERSION,
+    capabilities: {
+      tools: {},
+      resources: {},
+    },
+    serverInfo: {
+      name: MCP_SERVER_NAME,
+      version: MCP_SERVER_VERSION,
+    },
+  };
+}
+
+function toolDefinitions(includePasswordLoginTool: boolean) {
+  const tools = [
+    {
+      name: 'collasco_get_general_instructions',
+      description:
+        'Get the shared Collasco general Instructions manual used as the canonical operating guide for agents.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'collasco_get_standard_documentation_catalog',
+      description:
+        'Get the shared Collasco standard documentation label catalog manual for choosing or suggesting documentation labels.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'collasco_list_projects',
+      description:
+        'List authenticated user projects. When q is omitted, the MCP server falls back to the user profile project summary to avoid the unstable unfiltered API listing.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          q: { type: 'string', description: 'Optional free-text search.' },
+          page: { type: 'number', description: 'Page number.' },
+          limit: { type: 'number', description: 'Page size.' },
+        },
+      },
+    },
+    {
+      name: 'collasco_search_projects',
+      description: 'Search the authenticated user projects by free text.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          q: { type: 'string', description: 'Search text.' },
+          page: { type: 'number', description: 'Page number.' },
+          limit: { type: 'number', description: 'Page size.' },
+        },
+        required: ['q'],
+      },
+    },
+    {
+      name: 'collasco_get_project',
+      description: 'Get one Collasco project by its id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project UUID.' },
+        },
+        required: ['projectId'],
+      },
+    },
+    {
+      name: 'collasco_get_project_structure',
+      description:
+        'Get the module and feature tree for navigation only. For questions about documentation, do not rely on the structure view; fetch documentation with the project, module, or feature documentation tools.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project UUID.' },
+        },
+        required: ['projectId'],
+      },
+    },
+    {
+      name: 'collasco_get_project_labels',
+      description:
+        'Get the full project label definitions, including instructions and role visibility.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project UUID.' },
+        },
+        required: ['projectId'],
+      },
+    },
+    {
+      name: 'collasco_get_project_documentation',
+      description: 'Get the project-level documentation entries for a project.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project UUID.' },
+        },
+        required: ['projectId'],
+      },
+    },
+    {
+      name: 'collasco_get_module_documentation',
+      description: 'Get the module-level documentation entries for a module.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string', description: 'Module UUID.' },
+        },
+        required: ['moduleId'],
+      },
+    },
+    {
+      name: 'collasco_get_feature_documentation',
+      description: 'Get the feature-level documentation entries for a feature.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          featureId: { type: 'string', description: 'Feature UUID.' },
+        },
+        required: ['featureId'],
+      },
+    },
+    {
+      name: 'collasco_create_module',
+      description: 'Create a module in a Collasco project.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project UUID.' },
+          name: { type: 'string', description: 'Module name.' },
+          description: { type: 'string', description: 'Optional module description.' },
+          parentModuleId: { type: 'string', description: 'Optional parent module UUID.' },
+          isRoot: { type: 'boolean', description: 'Whether this module is a root module.' },
+        },
+        required: ['projectId', 'name'],
+      },
+    },
+    {
+      name: 'collasco_create_feature',
+      description: 'Create a feature in a Collasco module.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string', description: 'Module UUID.' },
+          name: { type: 'string', description: 'Feature name.' },
+          description: { type: 'string', description: 'Optional feature description.' },
+          priority: {
+            type: 'string',
+            enum: ['LOW', 'MEDIUM', 'HIGH'],
+            description: 'Optional feature priority.',
+          },
+          status: {
+            type: 'string',
+            enum: ['PENDING', 'IN_PROGRESS', 'DONE'],
+            description: 'Optional feature status.',
+          },
+        },
+        required: ['moduleId', 'name'],
+      },
+    },
+    {
+      name: 'collasco_update_module',
+      description: 'Update a Collasco module.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string', description: 'Module UUID.' },
+          name: { type: 'string', description: 'Optional new module name.' },
+          description: { type: 'string', description: 'Optional new module description.' },
+          parentModuleId: { type: 'string', description: 'Optional new parent module UUID.' },
+          isRoot: { type: 'boolean', description: 'Optional root-module flag.' },
+        },
+        required: ['moduleId'],
+      },
+    },
+    {
+      name: 'collasco_update_feature',
+      description: 'Update a Collasco feature.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          featureId: { type: 'string', description: 'Feature UUID.' },
+          moduleId: { type: 'string', description: 'Optional target module UUID.' },
+          name: { type: 'string', description: 'Optional new feature name.' },
+          description: { type: 'string', description: 'Optional new feature description.' },
+          priority: {
+            type: 'string',
+            enum: ['LOW', 'MEDIUM', 'HIGH'],
+            description: 'Optional feature priority.',
+          },
+          status: {
+            type: 'string',
+            enum: ['PENDING', 'IN_PROGRESS', 'DONE'],
+            description: 'Optional feature status.',
+          },
+        },
+        required: ['featureId'],
+      },
+    },
+    {
+      name: 'collasco_delete_module',
+      description: 'Delete a Collasco module.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string', description: 'Module UUID.' },
+          cascade: {
+            type: 'boolean',
+            description: 'Whether to delete child modules/features as a subtree.',
+          },
+          force: {
+            type: 'boolean',
+            description: 'Whether to delete even when published versions exist.',
+          },
+        },
+        required: ['moduleId'],
+      },
+    },
+    {
+      name: 'collasco_delete_feature',
+      description: 'Delete a Collasco feature.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          featureId: { type: 'string', description: 'Feature UUID.' },
+          force: {
+            type: 'boolean',
+            description: 'Whether to delete even when a published version exists.',
+          },
+        },
+        required: ['featureId'],
+      },
+    },
+    {
+      name: 'collasco_update_documentation',
+      description: 'Update documentation content for a project, module, or feature label.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          entityType: {
+            type: 'string',
+            enum: ['project', 'module', 'feature'],
+            description: 'Documentation entity type.',
+          },
+          entityId: { type: 'string', description: 'Project, module, or feature UUID.' },
+          labelId: { type: 'string', description: 'Project label UUID.' },
+          content: { type: 'string', description: 'Optional documentation content.' },
+          isNotApplicable: {
+            type: 'boolean',
+            description: 'Optional not-applicable flag for this documentation field.',
+          },
+        },
+        required: ['entityType', 'entityId', 'labelId'],
+      },
+    },
+  ];
+
+  if (!includePasswordLoginTool) return tools;
+
+  return [
+    {
+      name: 'collasco_login',
+      description:
+        'Log into the Collasco API with email/password or configured environment variables.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          email: { type: 'string', description: 'Collasco account email.' },
+          password: { type: 'string', description: 'Collasco account password.' },
+        },
+      },
+    },
+    ...tools,
+  ];
+}
+
+function resourceDefinitions() {
+  return [
+    {
+      uri: GENERAL_INSTRUCTIONS_RESOURCE_URI,
+      name: 'Collasco general instructions',
+      description:
+        'Shared Collasco project-root manual filtered to the Instructions label, used as the canonical operating guide for agents.',
+      mimeType: 'application/json',
+    },
+    {
+      uri: DOCUMENTATION_CATALOG_RESOURCE_URI,
+      name: 'Collasco standard documentation label catalog',
+      description:
+        'Shared manual with the standard Collasco documentation label catalog, used by agents to choose or suggest labels when project labels do not fit well.',
+      mimeType: 'application/json',
+    },
+  ];
+}
+
+function jsonRpcResult(id: JsonRpcId, result: unknown): JsonRpcResponse {
+  return {
+    jsonrpc: JSON_RPC_VERSION,
+    id,
+    result,
+  };
+}
+
+function jsonRpcError(id: JsonRpcId, error: unknown): JsonRpcResponse {
+  const rpcError =
+    error instanceof McpError
+      ? { code: error.code, message: error.message, data: error.data }
+      : { code: -32603, message: error instanceof Error ? error.message : 'Unknown error' };
+
+  return {
+    jsonrpc: JSON_RPC_VERSION,
+    id,
+    error: rpcError,
+  };
+}
+
+function logActivityToStderr(message: string, details: Record<string, unknown> = {}): void {
+  writeLogLineToStderr(formatActivityLogMessage(message, details));
+}
+
+function logErrorToStderr(message: string, details: Record<string, unknown> = {}): void {
+  writeLogToStderr({
+    level: 'error',
+    message,
+    details: redactForLog(details),
+  });
+}
+
+function writeLogToStderr(entry: Record<string, unknown>): void {
+  writeLogLineToStderr(
+    JSON.stringify({
+      component: 'collasco-mcp',
+      ...entry,
+    }),
+  );
+}
+
+function writeLogLineToStderr(message: string): void {
+  try {
+    process.stderr.write(`${formatLogTimestamp(new Date())} ${message}\n`);
+  } catch {
+    // Logging must never interfere with MCP responses.
+  }
+}
+
+function formatActivityLogMessage(message: string, details: Record<string, unknown>): string {
+  const tool = asOptionalString(details.tool);
+  if (tool) return `Tool call: ${tool}`;
+
+  const uri = asOptionalString(details.uri);
+  if (uri) return `Resource read: ${uri}`;
+
+  return message.replace(/\.$/, '');
+}
+
+function formatLogTimestamp(date: Date): string {
+  const year = date.getFullYear();
+  const month = padDatePart(date.getMonth() + 1);
+  const day = padDatePart(date.getDate());
+  const hours = padDatePart(date.getHours());
+  const minutes = padDatePart(date.getMinutes());
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+function padDatePart(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function serializeErrorForClient(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+    };
+  }
+
+  return {
+    message: String(error),
+  };
+}
+
+function redactForLog(value: unknown): unknown {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactForLog(item));
+  }
+
+  if (!isRecord(value)) {
+    return limitLogValue(value);
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => [
+      key,
+      isSensitiveLogKey(key) ? '[REDACTED]' : redactForLog(entryValue),
+    ]),
+  );
+}
+
+function isSensitiveLogKey(key: string): boolean {
+  return /authorization|password|token|secret|cookie|set-cookie/i.test(key);
+}
+
+function limitLogValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  return value.length > 2000 ? `${value.slice(0, 2000)}...[truncated]` : value;
+}
+
+function toolTextResult(text: string) {
+  return {
+    content: [
+      {
+        type: 'text',
+        text,
+      },
+    ],
+  };
+}
+
+function parseContentLength(headerText: string): number {
+  const match = headerText.match(/Content-Length:\s*(\d+)/i);
+  if (!match) {
+    throw new McpError(-32700, 'Missing Content-Length header.');
+  }
+  return Number(match[1]);
+}
+
+function parseBearerToken(authorization: string | string[] | undefined): string | null {
+  const header = Array.isArray(authorization) ? authorization[0] : authorization;
+  const match = header?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+function acceptsEventStream(accept: string | string[] | undefined): boolean {
+  const values = Array.isArray(accept) ? accept : [accept];
+  return values.some((value) => value?.toLowerCase().includes('text/event-stream'));
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function sendJson(
+  res: ServerResponse,
+  statusCode: number,
+  payload: unknown,
+  headers: Record<string, string> = {},
+): void {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body, 'utf8'),
+    ...headers,
+  });
+  res.end(body);
+}
+
+function sendEmpty(
+  res: ServerResponse,
+  statusCode: number,
+  headers: Record<string, string> = {},
+): void {
+  res.writeHead(statusCode, headers);
+  res.end();
+}
+
+function sendUnauthorized(
+  res: ServerResponse,
+  resourceUrl: string,
+  description = 'Authorization required.',
+): void {
+  sendJson(
+    res,
+    401,
+    { error: 'unauthorized', error_description: description },
+    {
+      ...corsHeaders(),
+      'WWW-Authenticate': `Bearer resource_metadata="${new URL('/.well-known/oauth-protected-resource', resourceUrl).toString()}"`,
+    },
+  );
+}
+
+function corsHeaders(): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': process.env.COLLASCO_MCP_CORS_ORIGIN || '*',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, MCP-Protocol-Version',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  };
+}
+
+function protectedResourceMetadata(resourceUrl: string): Record<string, unknown> {
+  return {
+    resource: resourceUrl,
+    authorization_servers: [authorizationServerUrl()],
+    bearer_methods_supported: ['header'],
+    scopes_supported: [
+      'collasco:projects:read',
+      'collasco:project-labels:read',
+      'collasco:project-documentation:read',
+      'collasco:module-documentation:read',
+      'collasco:feature-documentation:read',
+      'collasco:modules:write',
+      'collasco:features:write',
+      'collasco:documentation:write',
+    ],
+  };
+}
+
+function mcpDiscovery(resourceUrl: string): Record<string, unknown> {
+  return {
+    name: 'collasco-mcp',
+    transport: 'streamable-http',
+    endpoint: resourceUrl,
+    methods: {
+      initialize: {
+        method: 'POST',
+        path: new URL(resourceUrl).pathname,
+        contentType: 'application/json',
+      },
+      health: {
+        method: 'GET',
+        path: '/health',
+      },
+      oauthProtectedResource: {
+        method: 'GET',
+        path: '/.well-known/oauth-protected-resource',
+      },
+    },
+  };
+}
+
+function authorizationServerUrl(): string {
+  if (process.env.COLLASCO_AUTHORIZATION_SERVER_URL) {
+    return process.env.COLLASCO_AUTHORIZATION_SERVER_URL;
+  }
+
+  return new URL(process.env.COLLASCO_API_BASE_URL || DEFAULT_API_BASE_URL).origin;
+}
+
+function parseAuthState(payload: unknown): AuthState {
+  if (!isRecord(payload)) {
+    throw new McpError(-32002, 'Unexpected login response.', payload);
+  }
+
+  const user = payload.user;
+  if (!isRecord(user)) {
+    throw new McpError(-32002, 'Login response is missing user details.', payload);
+  }
+
+  return {
+    accessToken: requiredString(payload.accessToken, 'login response accessToken'),
+    refreshToken: requiredString(payload.refreshToken, 'login response refreshToken'),
+    accessTokenExpirationDate: asOptionalString(payload.accessTokenExpirationDate) ?? null,
+    refreshTokenExpirationDate: asOptionalString(payload.refreshTokenExpirationDate) ?? null,
+    user: {
+      id: requiredString(user.id, 'login response user.id'),
+      email: requiredString(user.email, 'login response user.email'),
+      role: requiredString(user.role, 'login response user.role'),
+    },
+  };
+}
+
+function extractErrorMessage(payload: unknown): string | null {
+  if (typeof payload === 'string' && payload.trim()) return payload;
+  if (!isRecord(payload)) return null;
+  if (typeof payload.message === 'string') return payload.message;
+  if (Array.isArray(payload.message) && payload.message.every((item) => typeof item === 'string')) {
+    return payload.message.join(', ');
+  }
+  if (typeof payload.error === 'string') return payload.error;
+  return null;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new McpError(-32602, `Missing or invalid ${label}.`);
+  }
+  return value;
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function asOptionalNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function asOptionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (value.toLowerCase() === 'true') return true;
+    if (value.toLowerCase() === 'false') return false;
+  }
+  return undefined;
+}
+
+function compactObject(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined),
+  );
+}
+
+function requiredDocumentationEntityType(value: unknown): 'project' | 'module' | 'feature' {
+  const entityType = requiredString(value, 'entityType').toLowerCase();
+  if (entityType === 'project' || entityType === 'module' || entityType === 'feature') {
+    return entityType;
+  }
+  throw new McpError(-32602, 'entityType must be project, module, or feature.');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function withTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
+}
+
+function stripLeadingSlashes(value: string): string {
+  return value.replace(/^\/+/, '');
+}
+
+if (shouldStartMcpServer()) {
+  if (shouldStartHttpMcpServer()) {
+    new CollascoHttpMcpServer().start();
+  } else {
+    new CollascoMcpServer().start();
+  }
+}
+
+function shouldStartMcpServer(): boolean {
+  const entry = process.argv[1] ?? '';
+  return /collasco-mcp\.(js|ts)$/.test(entry);
+}
+
+function shouldStartHttpMcpServer(): boolean {
+  return process.argv.includes('--http') || process.env.COLLASCO_MCP_TRANSPORT === 'http';
+}
