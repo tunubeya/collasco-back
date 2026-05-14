@@ -1,31 +1,23 @@
-# Instructions
+# Agent Instructions
 
-Use the Collasco general instructions exposed by MCP as the canonical operating guide for working with Collasco.
+This file is the instruction index for the `ums-api` repository.
 
-Prefer the `collasco://instructions/general` MCP resource. If resources are unavailable in the client, use the `collasco_get_general_instructions` tool.
+Before making changes, read the relevant instruction files below:
 
-Collasco documents itself in Collasco as a project named `Collasco`. Use the available Collasco MCP server to find that project, inspect its structure, and read its labels and documentation.
+- For NestJS backend patterns, modules, controllers, services, DTOs, guards, and filters, read [Backend instructions](docs/agent-instructions/backend.md).
+- For Prisma schema changes, migrations, generated clients, and seed data, read [Prisma instructions](docs/agent-instructions/prisma.md).
+- For tests, linting, builds, and verification commands, read [Testing instructions](docs/agent-instructions/testing.md).
+- For Collasco MCP behavior, server packaging, and Collasco project rules, read [Collasco MCP instructions](docs/agent-instructions/mcp-collasco.md).
+- For creating or editing GitHub issues for Collasco, read [GitHub issue instructions](docs/agent-instructions/github-issues.md).
 
-Before working with Collasco content, read the shared `Instructions` manual for general Collasco guidance. Then use MCP to read the target project's labels and documentation before drafting or changing that project.
+Rules in this `agents.md` always apply. Rules in the linked files apply when working in their area.
 
-Never mutate live Collasco project contents unless the user explicitly names the target project and asks for a mutation. Automated MCP tests and exploratory write calls use the `Collasco Automated E2E Testsuite` project.
+## General Rules
 
-Each time a new version of the Collasco MCP server is created, update feature `a1d3abfd-8f35-4203-8d7e-a3c3f695da3d` with the new version number. This update is pre-authorized and does not require additional explicit permission.
-
-## GitHub issues
-
-When the user asks to create a GitHub issue for Collasco, write the issue in English.
-
-Create Collasco GitHub issues in `tunubeya/qms-front` unless the user explicitly names another repository.
-
-When creating or editing issue bodies with `gh`, use real multiline Markdown. Do not pass escaped `\n` sequences that render literally in GitHub.
-
-If the user describes the issue as a bug story, format it with a `## Bug story` section using "As a ..., I want ..., so that ...", followed by problem, expected behavior, actual behavior, reproduction steps, and acceptance criteria.
-
-Bug issues and bug stories must receive the `bug` label.
-
-Small change issues must receive the `Small change` label. When the user describes a ticket as a small change, create it in `tunubeya/qms-front`, add it to the Collasco project, and put it directly in the `Todo` status column unless the user asks for another status.
-
-Add new Collasco issues to GitHub Project `Collasco`: `https://github.com/users/tunubeya/projects/2/views/1`. Bug issues and small change issues must be added to the project and put in the `Todo` status column unless the user asks for another status.
-
-After creating a Collasco issue, verify that it appears in the `Collasco` project with the expected `Status` value before reporting it as done.
+- Prefer existing NestJS and Prisma patterns already present in this repository.
+- Keep changes scoped to the requested behavior. Do not introduce new frameworks, architectural layers, or broad refactors without explicit approval.
+- Do not mutate live Collasco project contents unless the user explicitly names the target project and asks for a mutation.
+- Protect secrets and credentials. Do not print `.env` values, tokens, or private keys in responses, logs, tests, or examples.
+- Preserve public API behavior unless the user explicitly asks for a breaking change.
+- When changing behavior, update or add focused tests when the repository has a nearby test pattern.
+- Before finalizing code changes, run the most relevant verification command from `docs/agent-instructions/testing.md` when feasible.
