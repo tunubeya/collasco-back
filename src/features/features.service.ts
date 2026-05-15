@@ -118,12 +118,12 @@ export class FeaturesService {
         id: true,
         moduleId: true,
         sortOrder: true,
-        module: { select: { projectId: true } },
+        module: { select: { projectId: true, deletedAt: true } },
       },
     });
     if (!feature) throw new NotFoundException('Feature not found');
-    // valida permisos por proyecto a partir del módulo
-    await this.requireModule(user, feature.moduleId, allowed);
+    if (feature.module.deletedAt) throw new NotFoundException('Module not found');
+    await this.requireProjectRole(user.sub, feature.module.projectId, allowed);
     return feature;
   }
 
@@ -406,14 +406,14 @@ export class FeaturesService {
         where: { id: featureId },
         data: baseData,
       });
-      await this.touchFeature(featureId);
+      await this.touchModule(feature.moduleId);
       return updated;
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       await this.compactOrdersAfterFeatureMove(tx, feature.moduleId, feature.sortOrder ?? null);
       const nextOrder = await this.nextSortOrderInModule(moduleUpdate, tx);
-      const updated = await tx.feature.update({
+      return tx.feature.update({
         where: { id: featureId },
         data: {
           ...baseData,
@@ -421,10 +421,9 @@ export class FeaturesService {
           sortOrder: nextOrder,
         },
       });
-      await this.touchModule(feature.moduleId);
-      await this.touchModule(moduleUpdate);
-      return updated;
     });
+    await Promise.all([this.touchModule(feature.moduleId), this.touchModule(moduleUpdate)]);
+    return updated;
   }
 
   async moveOrder(user: AccessTokenPayload, featureId: string, direction: MoveDirection) {
