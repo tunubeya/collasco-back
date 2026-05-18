@@ -123,6 +123,35 @@ export class ProjectsService {
     private readonly gh: GithubService,
   ) {}
 
+  private hasDocumentationContent(summary: DocumentationLabelSummary) {
+    return Boolean(summary.content?.trim());
+  }
+
+  private shouldReplaceDocumentationSummary(
+    current: DocumentationLabelSummary,
+    candidate: DocumentationLabelSummary,
+  ) {
+    const currentHasContent = this.hasDocumentationContent(current);
+    const candidateHasContent = this.hasDocumentationContent(candidate);
+    if (currentHasContent !== candidateHasContent) return candidateHasContent;
+    if (current.isNotApplicable !== candidate.isNotApplicable) return !candidate.isNotApplicable;
+    return candidate.updatedAt > current.updatedAt;
+  }
+
+  private addDocumentationSummary(
+    docs: DocumentationLabelSummary[],
+    summary: DocumentationLabelSummary,
+  ) {
+    const existingIndex = docs.findIndex((doc) => doc.labelId === summary.labelId);
+    if (existingIndex === -1) {
+      docs.push(summary);
+      return;
+    }
+    if (this.shouldReplaceDocumentationSummary(docs[existingIndex], summary)) {
+      docs[existingIndex] = summary;
+    }
+  }
+
   private async resolveProjectRole(userId: string, project: { id: string; ownerId: string }) {
     if (project.ownerId === userId) {
       return this.prisma.projectRole.findFirst({
@@ -525,7 +554,6 @@ export class ProjectsService {
     const featureDocs = new Map<string, DocumentationLabelSummary[]>();
     const projectDocs: DocumentationLabelSummary[] = [];
     const featureLinksMap = new Map<string, LinkedFeatureSummary[]>();
-
     for (const record of documentationFields) {
       const labelInfo = visibleLabelMap.get(record.labelId);
       if (!labelInfo) continue;
@@ -540,14 +568,14 @@ export class ProjectsService {
       };
       if (record.entityType === DocumentationEntityType.MODULE && record.moduleId) {
         const list = moduleDocs.get(record.moduleId) ?? [];
-        list.push(summary);
+        this.addDocumentationSummary(list, summary);
         moduleDocs.set(record.moduleId, list);
       } else if (record.entityType === DocumentationEntityType.FEATURE && record.featureId) {
         const list = featureDocs.get(record.featureId) ?? [];
-        list.push(summary);
+        this.addDocumentationSummary(list, summary);
         featureDocs.set(record.featureId, list);
       } else if (record.entityType === DocumentationEntityType.PROJECT && includeProjectDocs) {
-        projectDocs.push(summary);
+        this.addDocumentationSummary(projectDocs, summary);
       }
     }
 
@@ -601,7 +629,6 @@ export class ProjectsService {
     }));
 
     const modulesTree = this.buildModuleTree(modules, features);
-
     return {
       projectId,
       description: project.description,
@@ -1012,14 +1039,14 @@ export class ProjectsService {
         };
         if (record.entityType === DocumentationEntityType.MODULE && record.moduleId) {
           const list = moduleDocs.get(record.moduleId) ?? [];
-          list.push(summary);
+          this.addDocumentationSummary(list, summary);
           moduleDocs.set(record.moduleId, list);
         } else if (record.entityType === DocumentationEntityType.FEATURE && record.featureId) {
           const list = featureDocs.get(record.featureId) ?? [];
-          list.push(summary);
+          this.addDocumentationSummary(list, summary);
           featureDocs.set(record.featureId, list);
         } else if (record.entityType === DocumentationEntityType.PROJECT) {
-          projectDocs.push(summary);
+          this.addDocumentationSummary(projectDocs, summary);
         }
       }
     }
