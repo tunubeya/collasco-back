@@ -5,9 +5,12 @@ Use these instructions when changing `prisma/schema.prisma`, migrations, seed da
 ## Schema and Migrations
 
 - Do not edit existing migration files unless the user explicitly asks to repair migration history.
-- For schema changes, create a new migration with `npm run prisma:migrate` when a database is available.
-- After schema changes, regenerate the Prisma client with `npm run prisma:generate`.
-- After switching branches or applying changes that include Prisma schema updates, run:
+- Never run `npx prisma migrate dev`, `npm run prisma:migrate`, `npx prisma db push`, or equivalent database mutation commands without explicit user approval.
+- Before modifying `prisma/schema.prisma`, check whether existing tables/data are affected and explain the impact when it matters.
+- If a schema becomes inconsistent after introspection or branch changes, do not try to repair it with additional database changes without asking the user.
+- For schema changes, prepare a new migration only when the user explicitly asks and a database is available.
+- Regenerate the Prisma client with `npm run prisma:generate` only when explicitly requested.
+- After switching branches or applying changes that include Prisma schema updates, recommend these commands only when verification is requested:
 
 ```bash
 npm run prisma:generate
@@ -30,4 +33,3 @@ npm run build
 
 - Keep seed data idempotent when possible.
 - Do not put real credentials, tokens, or customer data in seed files.
-

@@ -19,5 +19,5 @@ Rules in this `agents.md` always apply. Rules in the linked files apply when wor
 - Do not mutate live Collasco project contents unless the user explicitly names the target project and asks for a mutation.
 - Protect secrets and credentials. Do not print `.env` values, tokens, or private keys in responses, logs, tests, or examples.
 - Preserve public API behavior unless the user explicitly asks for a breaking change.
-- When changing behavior, update or add focused tests when the repository has a nearby test pattern.
-- Before finalizing code changes, run the most relevant verification command from `docs/agent-instructions/testing.md` when feasible.
+- Do not add tests, update tests, run tests, run lint, or run build commands unless the user explicitly asks for verification.
+- If code changes are made without verification because the user did not ask for it, mention that no tests or verification commands were run.

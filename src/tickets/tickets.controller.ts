@@ -48,13 +48,18 @@ export class TicketsController {
   }
 
   @Get('tickets')
-  list(@Query() query: ListTicketsQueryDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.ticketsService.list(query, user);
+  async list(@Query() query: ListTicketsQueryDto, @CurrentUser() user: AccessTokenPayload) {
+    
+    let a = await this.ticketsService.list(query, user);
+    console.log(a);
+    return a;
   }
 
   @Get('tickets/counts')
-  getCounts(@Query('projectId') projectId: string | undefined, @CurrentUser() user: AccessTokenPayload) {
-    return this.ticketsService.getCounts(user.sub, projectId);
+  async getCounts(@Query('projectId') projectId: string | undefined, @CurrentUser() user: AccessTokenPayload) {
+    let a = await this.ticketsService.getCounts(user.sub, projectId);
+    console.log(a);
+    return a;
   }
 
   @Get('projects/:projectId/tickets/autocomplete')

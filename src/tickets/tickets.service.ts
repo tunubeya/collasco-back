@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateTicketDto,
@@ -737,17 +738,10 @@ export class TicketsService {
   async list(query: ListTicketsQueryDto, user: AccessTokenPayload) {
     const { page = 1, limit = 20, scope, projectId, status } = query;
     const skip = (page - 1) * limit;
-    const where: any = {};
+    const where: Prisma.TicketWhereInput = {};
+    const accessWhere = await this.getTicketReadAccessWhere(user.sub, projectId);
 
-    if (projectId) {
-      where.projectId = projectId;
-    } else if (scope !== TicketScope.ALL && scope !== TicketScope.EXTERNAL) {
-      const memberProjects = await this.prisma.projectMember.findMany({
-        where: { userId: user.sub },
-        select: { projectId: true },
-      });
-      where.projectId = { in: memberProjects.map((m) => m.projectId) };
-    }
+    Object.assign(where, accessWhere);
 
     if (scope === TicketScope.MINE) {
       where.createdById = user.sub;
@@ -805,32 +799,88 @@ export class TicketsService {
   }
 
   async getCounts(userId: string, projectId?: string) {
-    const myProjects = projectId
-      ? [projectId]
-      : (
-          await this.prisma.projectMember.findMany({
-            where: { userId },
-            select: { projectId: true },
-          })
-        ).map((m) => m.projectId);
+    const accessWhere = await this.getTicketReadAccessWhere(userId, projectId);
 
-    if (!projectId && myProjects.length === 0) {
+    if (accessWhere.OR?.length === 0) {
       return { counts: { all: 0, mine: 0, assigned: 0, unassigned: 0, resolved: 0, external: 0 } };
     }
 
     const activeStatus = { in: [TicketStatus.OPEN, TicketStatus.PENDING] };
 
-    const whereBase = projectId ? { projectId } : { projectId: { in: myProjects } };
-
     const [all, mine, assigned, unassigned, resolved, external] = await Promise.all([
-      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus } }),
-      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, createdById: userId } }),
-      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, assigneeId: userId } }),
-      this.prisma.ticket.count({ where: { ...whereBase, status: activeStatus, assigneeId: null } }),
-      this.prisma.ticket.count({ where: { ...whereBase, status: TicketStatus.RESOLVED } }),
-      this.prisma.ticket.count({ where: { ...whereBase, NOT: { publicReporterEmail: null }}}),
+      this.prisma.ticket.count({ where: { ...accessWhere, status: activeStatus } }),
+      this.prisma.ticket.count({
+        where: { ...accessWhere, status: activeStatus, createdById: userId },
+      }),
+      this.prisma.ticket.count({
+        where: { ...accessWhere, status: activeStatus, assigneeId: userId },
+      }),
+      this.prisma.ticket.count({
+        where: { ...accessWhere, status: activeStatus, assigneeId: null },
+      }),
+      this.prisma.ticket.count({ where: { ...accessWhere, status: TicketStatus.RESOLVED } }),
+      this.prisma.ticket.count({ where: { ...accessWhere, NOT: { publicReporterEmail: null } } }),
     ]);
     return { counts: { all, mine, assigned, unassigned, resolved, external } };
+  }
+
+  private async getTicketReadAccessWhere(
+    userId: string,
+    projectId?: string,
+  ): Promise<Prisma.TicketWhereInput> {
+    const memberships = await this.prisma.projectMember.findMany({
+      where: {
+        userId,
+        ...(projectId ? { projectId } : {}),
+      },
+      select: {
+        projectId: true,
+        role: {
+          select: {
+            isOwner: true,
+            rolePermissions: {
+              select: { permission: { select: { key: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    const readAllProjectIds: string[] = [];
+    const readOwnProjectIds: string[] = [];
+
+    for (const membership of memberships) {
+      if (membership.role.isOwner) {
+        readAllProjectIds.push(membership.projectId);
+        continue;
+      }
+
+      const permissions = membership.role.rolePermissions.map((rp) => rp.permission.key);
+      if (permissions.includes(PERMISSION_KEYS.TICKET_READ_ALL)) {
+        readAllProjectIds.push(membership.projectId);
+      } else if (permissions.includes(PERMISSION_KEYS.TICKET_READ_OWN)) {
+        readOwnProjectIds.push(membership.projectId);
+      }
+    }
+
+    const accessConditions: Prisma.TicketWhereInput[] = [];
+    if (readAllProjectIds.length > 0) {
+      accessConditions.push({ projectId: { in: readAllProjectIds } });
+    }
+    if (readOwnProjectIds.length > 0) {
+      accessConditions.push({
+        projectId: { in: readOwnProjectIds },
+        createdById: userId,
+      });
+    }
+
+    if (accessConditions.length === 0) {
+      return { OR: [] };
+    }
+    if (accessConditions.length === 1) {
+      return accessConditions[0];
+    }
+    return { OR: accessConditions };
   }
 
   async uploadImage(
