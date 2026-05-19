@@ -287,7 +287,7 @@ export class TicketsService {
         }
 
         // Send reassignment notification using preferences
-        void this.sendTicketAssignedNotification(id, newAssigneeId, 'reassigned');
+        void this.sendTicketAssignedNotification(id, newAssigneeId, 'reassigned', user.sub);
       } else if (oldAssigneeId && !newAssigneeId) {
         // Assigned -> Unassigned
         await this.prisma.ticketNotifyUser.deleteMany({
@@ -351,7 +351,9 @@ export class TicketsService {
           });
         }
         // Send assignment notification using preferences
-        this.sendTicketAssignedNotification(id, newAssigneeId, 'assigned').catch(console.error);
+        this.sendTicketAssignedNotification(id, newAssigneeId, 'assigned', user.sub).catch(
+          console.error,
+        );
       }
     }
 
@@ -489,7 +491,10 @@ export class TicketsService {
     ticketId: string,
     userId: string,
     type: 'assigned' | 'reassigned',
+    actorId?: string,
   ) {
+    if (actorId === userId) return;
+
     const ticket = await this.prisma.ticket.findUnique({
       where: { id: ticketId },
       select: { title: true },
